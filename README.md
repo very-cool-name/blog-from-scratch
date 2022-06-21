@@ -1,13 +1,12 @@
 # Intro
-Please don't ask me why, but I decided to write an `std::variant` from scratch. It turned out to be much deeper rabbit hole, encompassing a lot of core C++ features:
+Please don't ask me why, but I decided to write an `std::variant` from scratch. It turned out to be what I think is the most interesting container to implement. It requires a deep dig into the guts of C++, including:
 1. `const` correctness
 2. Exception safety
 3. Placement new
 4. Variadic templates
 5. Combining templates in run time and compile time
-
-When in trouble I had to look into variant implementations and that was not easy. I decided to write follow up in case someone else wants to try and needs clues.
-I'd advise you to get familiar with variadic templates **TODO Link** if you are not, because variant uses them, and text has a bit brief explanation.
+And much more.
+I had a lot of confusion implementing `std::variant` because I didn't know a lot of stuff required to build proper `std::variant`. And when in doubt I had to look for clues in the code of available implemntations of variant, which are not built for clarity of reading. That's why I decided to write a clear follow up to my endeavour and I hope it might help anyone reading to learn more about C++.
 I think the best way to work with this text is to start building `std::variant` yourself. And look for answers here in case of trouble. That's why text is structured to tackle one function of variant at time. And every block ends with plan on what we'll build next, so you may stop and try before seeing my solution. If you are familiar with what `std::variant` is you may jump straight to the part [Building our own Variant](building-our-own-variant). But in case you are not - what is `std::variant`?
 
 # What is variant?
@@ -360,7 +359,7 @@ const int y = 0;
 const int& clref_y = y;
 int& lref_y = const_cast<int&>(clref_y); // OOPS undefined because y is originally const
 ```
-Returning to our example with `lref` function calling `clref`. If we are sure, that `clref` operates only on object x, that we passed - it's perfectly legal to cast away `const`.
+Returning to our example with `lref` function calling `clref`. If we are sure, that `clref` operates only on object x that we passed - it's perfectly legal to cast away `const`.
 
 ```cpp
 const int& clref(const int& x) {
@@ -371,7 +370,7 @@ int& lref(int& x) {
     return const_cast<int&>(clref(x));
 }
 ```
-And that's exactly our case with `get` function. So that means we can only implement const reference version and call it from every other. How do we do it?
+And that's exactly our case with `get` function. So that means we may only implement const reference version and call it from every other. How do we do it?
 
 ### `get<T>(const Variant&)`
 
