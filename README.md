@@ -1,12 +1,19 @@
 # Intro
-Once I decided to write a standard-like variant from scratch. It turned out to be much deeper rabbit hole, than I expected. And I had to look into variant implementation for clues **WHICH is not a pleasant experience**. So I decided to write follow up in case someone wants to try this and will also need help.
-I'd advise you to get familiar with variadic templates **!!!Link** if you are not, because variant uses them, and text has a bit brief explanation.
-I think the best way to work with this text is to start building variant yourself. And look for answers here in case of trouble. That's why text is structured to tackle one function of variant at time. And every block ends with plan on what we'll build next, so reader may stop and try this.
+Please don't ask me why, but I decided to write an `std::variant` from scratch. It turned out to be much deeper rabbit hole, encompassing a lot of core C++ features:
+1. `const` correctness
+2. Exception safety
+3. Placement new
+4. Variadic templates
+5. Combining templates in run time and compile time
+
+When in trouble I had to look into variant implementations and that was not easy. I decided to write follow up in case someone else wants to try and needs clues.
+I'd advise you to get familiar with variadic templates **TODO Link** if you are not, because variant uses them, and text has a bit brief explanation.
+I think the best way to work with this text is to start building `std::variant` yourself. And look for answers here in case of trouble. That's why text is structured to tackle one function of variant at time. And every block ends with plan on what we'll build next, so you may stop and try before seeing my solution. If you are familiar with what `std::variant` is you may jump straight to the part [Building our own Variant](building-our-own-variant). But in case you are not - what is `std::variant`?
 
 # What is variant?
 
 ## Union
-You've probably heard about `union` in C and C++. If you've not - `union` is a way to reuse same storage for different types. It holds several types on stack and is only as large as the maximum of said types. Here is the example.
+You've probably heard about `union` in C and C++. If you've not - `union` is a way to reuse same storage for different types. It holds several types on stack. The size of stack space used is only as large as the maximum of said types.
 
 ```cpp
 union S
@@ -24,7 +31,7 @@ int main() {
 }
 ```
 
-**!!!Picture with memory**
+**TODO Picture with memory**
 
 Unfortunately `union` is very easy to misuse:
 
@@ -34,22 +41,21 @@ s.big_int = 1;              // assign big_int
 std::cout << s.small_int;   // OOPS - undefined behaviour
 ```
 
-And as we all know UB is very bad - it happens only in runtime and very hard to catch.
-[note] There are also bigger problems, like a need to explicitly call destructor for more complex types.
+And as we all know UB is very bad - it happens only in runtime and very hard to catch. There are much more subtle problems with unioin, like the fact that you need to explicitly call proper destructors for more complex types.
 
 You might be wondering why would anyone ever want to share space between types. And I'll link you to [this Stackoverflow](https://stackoverflow.com/questions/4788965/when-would-anyone-use-a-union-is-it-a-remnant-from-the-c-only-days) answer for lengthy explanation. But in short:
 1. Performance optimization
 2. Bit trickery
 3. Different way to handle polymorphism
 
-**!!!Example with json, maybe**
+**TODO Example with json, maybe**
 
-The danger of using union actually makes 3-rd point much underappreciated. And variant makes this stuff easy.
+The danger of using union actually makes 3-rd point much underappreciated. And all the danger boils down to the fact, that `union` make the user do all type bookkeeping. That's exactly what `std::variant` saves user from.
 
 ## Variant
-`std::variant` **!!!is same**  is different because it knows the type it holds. If user tries to get wrong type, variant throws `std::bad_variant_access` exception.
+`std::variant` uses some extra space to hold type information, so it prevents illegal access by throwing `std::bad_varaint_access`.
 
-**!!!How does variant deecides between two integers?**
+**TODO How does variant deecides between two integers?**
 ```cpp
 int main() {
     std::variant<std::int32_t, std::uint8_t> v{1}; // variant now holds std::int32_t{1}
@@ -68,7 +74,6 @@ int main() {
 
 Safety has a cost and `variant` is slightyly bigger than union, because it has to store type information somewhere.
 
-**!!!format**
 ```cpp
 std::cout << sizeof(S) << "\n" << sizeof(std::variant<std::int32_t, std::uint8_t>) << std::endl;
 ```
@@ -178,8 +183,8 @@ Variant(const U& var) {
 }
 ```
 
-[placement new](https://en.cppreference.com/w/cpp/language/new) can be used to copy construct value inside `variant`'s storage . Placement new does not allocate memory as ordinary new does. Instead it uses provided chunk of memory and calls constructor of object to initialize it.
-**!!!Picture of placement new vs new**
+[placement new](https://en.cppreference.com/w/cpp/language/new) can be used to copy construct value inside `Variant`'s storage . Placement new does not allocate memory as ordinary new does. Instead it uses provided chunk of memory and calls constructor of object to initialize it.
+**TODO Picture of placement new vs new**
 
 ```cpp
 template<typename U>
@@ -188,17 +193,17 @@ Variant(const U& var) {
 }
 ```
 
-You may already see the problem, that right now we can place any type `U` inside our storage, which is not the only problem. But in order to understand and fix them, let's continue with the interface and change constructor on thee way.
-How do we get the value back from `variant`?
+You may already see the problem - right now we can place any type `U` inside our storage. Let's continue with implementing ther rest of the interface for now. Other problems'll become obvious and we'll fix them along the way, I promise.
+Next, how do we get the value back from `Variant`?
 
 ## Get
-Get has two versions typed and indexed.
+Get has two versions: typed and indexed.
 ```cpp
 std::variant<int, char> v;
 std::get<int>(v); // tries to get variable of type int
 std::get<0>(v);   // tries to get first type, which is also int
 ```
-As you may see get is not a member function in the standard. It adds a bit of complexity with declaring this function `friend`, so let's start with implementing `get` as member function. It's a bit easier to implement typed version of get, so let's focus on that one. We might be tempted to just cast our buffer space to pointer to desired type `U*`. There are two ways to do this `reinterpret_cast` or two `static_cast`s, first to `void*` second to `U*`.
+As you may see `get` is not a member function of `varaint` in the standard. For us it adds a bit of complexity with declaring this function `friend`, so let's start with implementing `get` as member function. It's also a bit easier to start from typed version of get, please believe me. We might be tempted to just cast our buffer space to pointer to desired type `U*`. There are two ways to do this `reinterpret_cast` or two `static_cast`s, first to `void*` second to `U*`.
 
 ```cpp
 template<typename U>
@@ -216,7 +221,7 @@ U* any_cast() {
 ```
 
 ### Saving type info
-Let's go back to the constructor and use very simple type info - index of the type in the sequence. `size_t` is used for index type, because length of pack `sizeof...(Types..)` has this type, so we might as well use it for indexing.
+Let's go back to the constructor and use very simple type info - index of the type in the sequence. `size_t` is used for index type, because length of pack `sizeof...(Types..)` has this type. It'll be definetly enough to store our index, so let's use it.
 ```cpp
 template<typename... Types>
 class Variant {
@@ -251,11 +256,14 @@ struct IndexOf {
     static constexpr size_t value = IndexOfImpl<T, 0, Types...>::value;
 };
 ```
-**Explanation in terms of recursion unroll**
-**That actually made a compile time error for wrong types**
+**TODO Explanation in terms of recursion unroll**
 
-### get<T>
-Now that we have `IndexOf` implemented and type index stored, `get<T>` becomes easy to implement.
+**TODO That actually made a compile time error for wrong types**
+
+**TODO Note on sizes**
+
+### `get<T>`
+Now that we have `IndexOf` implemented and type index stored, `get<T>` becomes rather easy to implement.
 ```cpp
 template<typename U>
 U& get() {
@@ -266,19 +274,23 @@ U& get() {
     }
 }
 ```
-Return type for template functions is not an easy thing to get right. For example, what if we have `Variant<int&>`? Then `U&` actually becomes `int&&` and that's not what we want. Luckily for us we don't need to think about this, because `std::varaint` forbids references, array types and `void*`.
-Now we can turn this `get` to free function, that accepts `Variant<Types...>` as a parameter.
+
+Return type for template functions is not an easy thing to get right. For example, what if we have `Variant<int&>`? Then `U&` actually becomes `int&&` and that's not what we want. Luckily for us we don't need to think about this, because `std::variant` forbids references, array types and `void*`.
+
+Now we can turn implemented `get` to free function, that accepts `Variant<Types...>` as a parameter.
 ```cpp
 template<typename U, typename... Args>
 U& get(Variant<Args...>& variant) {
-    if (IndexOf<U, Types...>::value == variant.type_idx_) {
+    if (IndexOf<U, Types...>::value == variant.type_idx_) { // check that index is right
         return *variant. template any_cast<U>();
-    } else {
-        throw std::runtime_error("Type is not right"); // bad_variant_access is in <variant> header
+    } else {                                                // if not - throw error
+        throw std::runtime_error("Type is not right");      // it's not bad_variant_access, because it's in the <variant> header
     }
 }
 ```
-The only odd thing here is **<variant. template>**.
+
+The only odd thing here is `variant. template`.
+**TODO A bit of explanation on that**.
 
 `get` needs to access `Variant`'s private section, so we'll need to declare it as friend. This is actually pretty straightforward if you don't try to overthink it and just copy to class:
 
@@ -289,7 +301,7 @@ class Variant {
     friend U& get(Variant<Args...>& variant);
 };
 ```
-We can't actually use `Types...` from Variant declaration. **<Explain linker errro>**
+We can't actually use `Types...` from Variant declaration. **TODO Explain linker error**
 
 The documentation has 4 overloads of function get:
 ```cpp
@@ -361,19 +373,14 @@ int& lref(int& x) {
 ```
 And that's exactly our case with `get` function. So that means we can only implement const reference version and call it from every other. How do we do it?
 
-### get<T>(const Variant&)
+### `get<T>(const Variant&)`
 
-**<explain>**
-```
-any_cast const
-mutable
-```
-`mutable` is totally okay here, example with `unique_ptr`.
+**TODO explain here**
 
 How do we do `get<index>`?
 
 ### get<index>
-We can build `get<index>` from `get<U>` if could only get `U` from index.
+`get<index>` can be build usig from `get<U>` if `U` can be deduced using index.
 
 ```cpp
 template<size_t Idx, typename... Args>
@@ -382,7 +389,7 @@ const ???& get(const Variant<Args...>& variant) {
 }
 ```
 
-Let's find a way to get type from the sequnce of `Args...`. We'll call it `TypeAtIdx`.
+Let's find a way to get type from the sequnce of `Args...` by index. We'll call it `TypeAtIdx`.
 
 ```cpp
 template<size_t Idx, size_t CurIdx, typename T, typename... Types>
@@ -401,6 +408,8 @@ struct TypeAtIdx {
 };
 ```
 
+**TODO unroll recursion**
+
 Now we can fill in gaps and don't forget to prefix every `TypeAtIdx` with `typename`, so compiler understands.
 ```cpp
 template<size_t Idx>
@@ -411,24 +420,25 @@ const typename TypeAtIdx<Idx, Types...>::type& get(const Variant<Args...>& varia
 ```
 That kinda leaks our implementation detail `TypeAtIdx` to the public interface of `Variant`.
 
-**<VariantAlternative>**
+**TODO VariantAlternative**
 Declare before, release after.
 
 ## Destruction
-Let's address another problem, that `Variant's` constructor introduced. Placement new can't be cleaned up with simple delete, code must explictly call appropiate destructor.
+Let's address another problem, that `Variant`'s constructor introduced. Placement new can't be cleaned up with simple `delete` call. Code must explictly call appropiate destructor.
 ```cpp
 std::array<std::byte, sizeof(T)> storage; // allocate storage
-T* tptr = new(storage.data()) T;
-tptr->~T();
+T* tptr = new(storage.data()) T;          // save type using pointer
+tptr->~T();                               // delete explicitly
 ```
-In our case it's a bit worse beacuse we can't actually save a pointer of type `T`. And even though we have `TypeAtIdx` it's not actually usable in runtime.
+
+In our case it's a bit worse beacuse we can't actually save a pointer of type `T`. And even though we have `TypeAtIdx` it's not usable in runtime.
 ```cpp
 ~Variant() {
-    using T = TypeAtIdx<type_idx_, Types...>;  // that does not work
+    using T = TypeAtIdx<type_idx_, Types...>;  // this does not work
     type_cast<T>()->~T();
 }
 ```
-Destrcutor can't be called recursively to iterate `Types...` , so we'll delegate this to a helper function. It will iterate through sequence of indexes `0..sizeof...(Types)` and when hitting appropriate one - use `TypeAtIdx` to call proper destructor.
+Destructor can't be called recursively to iterate `Types...` , so a helper function is needed. It will iterate through sequence of indexes `0..sizeof...(Types)` and when hitting appropriate one - use `TypeAtIdx` to call proper destructor.
 
 ```cpp
 template<size_t Idx>
@@ -462,7 +472,7 @@ void destroy() {
     }
 }
 ```
-Compiler can't predict, that this function never actually hits the line `destroy<1>();`, so it will try to generate `destroy<1>`. And there is an error in this generation.
+Compiler can't predict, that this function never actually hits the line `destroy<1>();`. Compiler will try to generate `destroy<1>`. And this leads to error.
 
 ```cpp
 template<1>
@@ -476,7 +486,7 @@ void destroy() {
 }
 ```
 
-The solution is to write explicit stop for recursion and specialize the function:
+The solution is to write explicit stop for recursion as template specialization.
 ```cpp
 template<>
 void destroy<sizeof...(Types)>() {}
@@ -505,7 +515,8 @@ void destroy() {}
 ### VariantSize
 ### GetIf
 ### Default constructor
-Okay, so now we actually have a pretty good `Variant`. It's constructed and destructed properly.
+Okay, so now we actually have a pretty neat little `Variant`. It has proper construction and destruction. The stored value can be type-safely retrieved and modified. But there are two big missing parts. Our `Variant` can't be copied or moved. And the typed of stored value is decided on creation and can't be changed later.
+**TODO connected to exception safety and that's where we'll start our part II**
 
 ### Visit
 ### Swap

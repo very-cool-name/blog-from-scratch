@@ -162,15 +162,18 @@ int main() {
     // std::variant<> x;
     test::TestAll<std::variant, variant_i::Variant>::test();
 
-    TypeCheck<decltype(variant_i::get<int>(std::declval<variant_i::Variant<char>>()))> x;
+    // TypeCheck<decltype(variant_i::get<int>(std::declval<variant_i::Variant<char>>()))> x;
     test::static_test::TestGet<char, std::variant<char>>::test();
     // const variant_i::Variant<int> x{1};
     // x.get<int>();
     // std::variant<int&&> x;
     // variant_i::get<int>(crref());
-    // variant_i::get<int>(variant_i::Variant<int>{1});
-    // variant_i::Variant<int> x{1};
-    // variant_i::get<0>(x) = 25;
+    variant_i::get<int>(variant_i::Variant<int>{1});
+    variant_i::Variant<int> x{1};
+    variant_i::get<0>(x) = 25;
+
+    std::cout << "\n" << sizeof(int8_t) << " " << sizeof(std::variant<int8_t, int16_t>);
+    std::cout << "\n" << sizeof(int32_t) << " " << sizeof(variant_i::Variant<int8_t, int16_t>);
 
     // std::variant<int> x{1};
     // TestNegative<std::variant<int>> y;

@@ -70,7 +70,12 @@ public:
 
 private:
     template<typename U>
-    U* any_cast() const {
+    const U* any_cast() const {
+        return static_cast<const U*>(static_cast<const void*>(storage_.data()));
+    }
+
+    template<typename U>
+    U* any_cast() {
         return static_cast<U*>(static_cast<void*>(storage_.data()));
     }
 
@@ -88,7 +93,7 @@ private:
     void destroy<sizeof...(Types)>() {}
 
     size_t type_idx_;
-    mutable std::array<std::byte, MaxSizeof<Types...>::value> storage_;
+    std::array<std::byte, MaxSizeof<Types...>::value> storage_;
 };
 
 template<typename U, typename... Args>
