@@ -1,6 +1,7 @@
 #pragma once
 
 #include <array>
+#include <type_traits>
 
 namespace variant_i {
 template<typename T, typename... Types>
@@ -33,7 +34,7 @@ struct IndexOf {
 
 template<size_t Idx, size_t CurIdx, typename T, typename... Types>
 struct TypeAtIdxImpl {
-    using type = TypeAtIdxImpl<Idx, CurIdx + 1, Types...>;
+    using type = typename TypeAtIdxImpl<Idx, CurIdx + 1, Types...>::type;
 };
 
 template<size_t Idx, typename T, typename... Types>
@@ -55,28 +56,45 @@ using VariantAlternativeT = typename VariantAlternative<Idx, T>::type;
 template<typename... Types>
 class Variant {
 public:
-    template<typename U>
-    Variant(U&& var)
-    : type_idx_{IndexOf<U, Types...>::value} {
-        new(storage_.data()) U(std::forward<U>(var));
+    template<typename T>
+    Variant(T&& var)
+    : type_idx_{IndexOf<T, Types...>::value} {
+        new(storage_.data()) T(std::forward<T>(var));
+    }
+
+    Variant()
+    : type_idx_{0} {
+        using T = typename TypeAtIdx<0, Types...>::type;
+        new(storage_.data()) T();
     }
 
     ~Variant() {
         destroy<0>();
     }
 
-    template<typename U, typename... Args>
-    friend const U& get(const Variant<Args...>& variant);
+    // template<typename T, typename... Args>
+    // friend std::add_pointer_t<const T> get_if(const Variant<Args...>* variant);
 
-private:
-    template<typename U>
-    const U* any_cast() const {
-        return static_cast<const U*>(static_cast<const void*>(storage_.data()));
+    template<size_t Idx, typename... Args>
+    friend std::add_pointer_t<const VariantAlternativeT<Idx, Variant<Args...>>> get_if(const Variant<Args...>* variant);
+
+    size_t index() {
+        return type_idx_;
     }
 
-    template<typename U>
-    U* any_cast() {
-        return static_cast<U*>(static_cast<void*>(storage_.data()));
+    size_t index() const {
+        return type_idx_;
+    }
+
+    void swap(Variant& other) {
+        std::swap(type_idx_, other.type_idx_);
+        std::swap(storage_, other.storage_);
+    }
+
+private:
+    template<typename T>
+    const T* any_cast() const {
+        return static_cast<const T*>(static_cast<const void*>(storage_.data()));
     }
 
     template<size_t Idx>
@@ -96,59 +114,103 @@ private:
     std::array<std::byte, MaxSizeof<Types...>::value> storage_;
 };
 
-template<typename U, typename... Args>
-const U& get(const Variant<Args...>& variant) {
-    if (IndexOf<U, Args...>::value == variant.type_idx_) {
-        return *variant. template any_cast<U>();
-    } else {
-        throw std::runtime_error("Type is not right");
-    }
-}
-
-template<typename U, typename... Args>
-U& get(Variant<Args...>& variant) {
-    const auto& cvariant = variant;
-    return const_cast<U&>(get<U>(cvariant));
-}
-
-template<typename U, typename... Args>
-U&& get(Variant<Args...>&& variant) {
-    return std::move(get<U>(variant));
-}
-
-template<typename U, typename... Args>
-const U&& get(const Variant<Args...>&& variant) {
-    const auto& cvariant = variant;
-    return std::move(get<U>(cvariant));
-}
-
-template<size_t Idx, typename... Args>
-const VariantAlternativeT<Idx, Variant<Args...>>& get(const Variant<Args...>& variant) {
-    using U = VariantAlternativeT<Idx, Variant<Args...>>;
-    return get<U>(variant);
-}
-
-template<size_t Idx, typename... Args>
-VariantAlternativeT<Idx, Variant<Args...>>& get(Variant<Args...>& variant) {
-    using U = VariantAlternativeT<Idx, Variant<Args...>>;
-    return get<U>(variant);
-}
-
-template<size_t Idx, typename... Args>
-VariantAlternativeT<Idx, Variant<Args...>>&& get(Variant<Args...>&& variant) {
-    using U = VariantAlternativeT<Idx, Variant<Args...>>;
-    return std::move(get<U>(variant));
-}
-
-template<size_t Idx, typename... Args>
-const VariantAlternativeT<Idx, Variant<Args...>>&& get(const Variant<Args...>&& variant) {
-    using U = VariantAlternativeT<Idx, Variant<Args...>>;
-    return std::move(get<U>(variant));
-}
-
 template<size_t Idx, typename... Types>
 struct VariantAlternative<Idx, Variant<Types...>> {
     using type = typename TypeAtIdx<Idx, Types...>::type;
 };
+
+template<size_t Idx, typename... Args>
+std::add_pointer_t<
+    const VariantAlternativeT<Idx, Variant<Args...>>
+> get_if(const Variant<Args...>* variant) {
+    if(variant == nullptr || Idx != variant->type_idx_) {
+        return nullptr;
+    } else {
+        using T = VariantAlternativeT<Idx, Variant<Args...>>;
+        return variant-> template any_cast<T>();
+    }
+}
+
+template<size_t Idx, typename... Args>
+std::add_pointer_t<
+    VariantAlternativeT<Idx, Variant<Args...>>
+> get_if(Variant<Args...>* variant) {
+    const auto* cvariant = variant;
+    using T = VariantAlternativeT<Idx, Variant<Args...>>;
+    return const_cast<std::add_pointer_t<T>>(get_if<Idx>(cvariant));
+}
+
+template<size_t Idx, typename... Args>
+const VariantAlternativeT<Idx, Variant<Args...>>& get(const Variant<Args...>& variant) {
+    const auto* content = get_if<Idx>(&variant);
+    if (content) {
+        return *content;
+    } else {
+        throw std::runtime_error("Variant holds different alternative");
+    }
+}
+
+template<size_t Idx, typename... Args>
+VariantAlternativeT<Idx, Variant<Args...>>& get(Variant<Args...>& variant) {
+    using T = VariantAlternativeT<Idx, Variant<Args...>>;
+    const auto& cvariant = variant;
+    return const_cast<T&>(get<Idx>(cvariant));
+}
+
+template<size_t Idx, typename... Args>
+VariantAlternativeT<Idx, Variant<Args...>>&& get(Variant<Args...>&& variant) {
+    return std::move(get<Idx>(variant));
+}
+
+template<size_t Idx, typename... Args>
+const VariantAlternativeT<Idx, Variant<Args...>>&& get(const Variant<Args...>&& variant) {
+    return std::move(get<Idx>(variant));
+}
+
+template<typename T, typename... Args>
+std::add_pointer_t<const T> get_if(const Variant<Args...>* variant) {
+    return get_if<IndexOf<T, Args...>::value>(variant);
+}
+
+template<typename T, typename... Args>
+std::add_pointer_t<T> get_if(Variant<Args...>* variant) {
+    return get_if<IndexOf<T, Args...>::value>(variant);
+}
+
+template<typename T, typename... Args>
+const T& get(const Variant<Args...>& variant) {
+    return get<IndexOf<T, Args...>::value>(variant);
+}
+
+template<typename T, typename... Args>
+T& get(Variant<Args...>& variant) {
+    return get<IndexOf<T, Args...>::value>(variant);
+}
+
+template<typename T, typename... Args>
+T&& get(Variant<Args...>&& variant) {
+    return std::move(get<T>(variant));
+}
+
+template<typename T, typename... Args>
+const T&& get(const Variant<Args...>&& variant) {
+    const auto& cvariant = variant;
+    return std::move(get<T>(cvariant));
+}
+
+template<typename T>
+struct VariantSize;
+
+template<typename... Types>
+struct VariantSize<Variant<Types...>>: std::integral_constant<size_t, sizeof...(Types)> {
+};
+
+template<typename T>
+inline constexpr size_t VariantSizeV = VariantSize<T>::value;
+
+template<typename T, typename... Types>
+bool holds_alternative(const Variant<Types...>& v) {
+    return v.index() == IndexOf<T, Types...>::value;
+}
 
 } // namespace variant_i

@@ -5,13 +5,17 @@ Please don't ask me why, but I decided to write an `std::variant` from scratch. 
 3. Placement new
 4. Variadic templates
 5. Combining templates in run time and compile time
-And much more.
-I had a lot of confusion implementing `std::variant` because I didn't know a lot of stuff required to build proper `std::variant`. And when in doubt I had to look for clues in the code of available implemntations of variant, which are not built for clarity of reading. That's why I decided to write a clear follow up to my endeavour and I hope it might help anyone reading to learn more about C++.
+
+And even more.
+
+I didn't know a lot of stuff required to build proper `std::variant`, so I had to look for clues in the code of available variant implementations. And they are not built for clarity of reading. That's why I decided to write a clear follow up to my endeavour and I hope it might help anyone reading to learn more about C++.
+
 I think the best way to work with this text is to start building `std::variant` yourself. And look for answers here in case of trouble. That's why text is structured to tackle one function of variant at time. And every block ends with plan on what we'll build next, so you may stop and try before seeing my solution. If you are familiar with what `std::variant` is you may jump straight to the part [Building our own Variant](building-our-own-variant). But in case you are not - what is `std::variant`?
 
 # What is variant?
 
 ## Union
+**TODO wording**
 You've probably heard about `union` in C and C++. If you've not - `union` is a way to reuse same storage for different types. It holds several types on stack. The size of stack space used is only as large as the maximum of said types.
 
 ```cpp
@@ -174,11 +178,11 @@ class Variant {
     Variant(const int32_t& x);
 };
 ```
-So we'll use constructor template, accepting any type `U`.
+So we'll use constructor template, accepting any type `T`.
 
 ```cpp
-template<typename U>
-Variant(const U& var) {
+template<typename T>
+Variant(const T& var) {
 }
 ```
 
@@ -186,49 +190,53 @@ Variant(const U& var) {
 **TODO Picture of placement new vs new**
 
 ```cpp
-template<typename U>
-Variant(const U& var) {
-    new(storage_.data()) U(var);
+template<typename T>
+Variant(const T& var) {
+    new(storage_.data()) T(var);
 }
 ```
 
-You may already see the problem - right now we can place any type `U` inside our storage. Let's continue with implementing ther rest of the interface for now. Other problems'll become obvious and we'll fix them along the way, I promise.
+You may already see the problem - right now we can place any type `T` inside our storage. Let's continue with implementing ther rest of the interface for now. Other problems'll become obvious and we'll fix them along the way, I promise.
 Next, how do we get the value back from `Variant`?
 
-## Get
-Get has two versions: typed and indexed.
+## GetIf
+The simplest value we can get from `Variant` is a strongly typed pointer to `storage`. It's tempting to simply cast `storage` to pointer of desired type `T*`. It's legally can be done through two `static_cast` operations.
 ```cpp
-std::variant<int, char> v;
-std::get<int>(v); // tries to get variable of type int
-std::get<0>(v);   // tries to get first type, which is also int
+template<typename T>
+T* any_cast() {
+    return *static_cast<T*>(static_cast<void*>(storage_.data()));
+}
 ```
-As you may see `get` is not a member function of `varaint` in the standard. For us it adds a bit of complexity with declaring this function `friend`, so let's start with implementing `get` as member function. It's also a bit easier to start from typed version of get, please believe me. We might be tempted to just cast our buffer space to pointer to desired type `U*`. There are two ways to do this `reinterpret_cast` or two `static_cast`s, first to `void*` second to `U*`.
+
+**TODO add_pointer_t?**
+
+Unfortunately it's the same undefined behaviour as with union if we guessed wrong. Coincidentally this function will be useful to us, so let's leave it for now.
+
+In order to avoid UB `get` can return `nullptr` if desired type is wrong. That's why the standard calls this function `get_if`. There're actually two versions of `get_if`: typed and indexed.
 
 ```cpp
-template<typename U>
-U& get() {
-    return *static_cast<U*>(static_cast<void*>(storage_.data()));
-}
+std::variant<int, char> v;
+std::get_if<int>(&v); // tries to get variable of type int
+std::get_if<0>(&v);   // tries to get first type, which is also int
 ```
-Unfortunately it's the same undefined behaviour as with union if we guessed wrong. We'll need to store some type info and check whether the call is right or not.
-But the function itself is useful to us, so we'll call it `any_cast`, make it private and return `U*`.
-```cpp
-template<typename U>
-U* any_cast() {
-    return static_cast<U*>(static_cast<void*>(storage_.data()));
-}
-```
+
+**TODO replace with indexed one**
+
+It's a bit more straightforward to implement typed one, so let's start with this one. Later we'll see that it will be our basic building block to implement all `get` functions.
+
+As we've seen before the type info needs to be stored somewhere, so illegal cast is not performed. How do we store type info for `Variant`?
 
 ### Saving type info
 Let's go back to the constructor and use very simple type info - index of the type in the sequence. `size_t` is used for index type, because length of pack `sizeof...(Types..)` has this type. It'll be definetly enough to store our index, so let's use it.
+
 ```cpp
 template<typename... Types>
 class Variant {
 public:
-    template<typename U>
-    Variant(const U& var)
-    : type_idx_{IndexOf<U, Types...>::value} {
-        new(storage_.data()) U(var);
+    template<typename T>
+    Variant(const T& var)
+    : type_idx_{IndexOf<T, Types...>::value} {
+        new(storage_.data()) T(var);
     }
 
 private:
@@ -255,61 +263,257 @@ struct IndexOf {
     static constexpr size_t value = IndexOfImpl<T, 0, Types...>::value;
 };
 ```
-**TODO Explanation in terms of recursion unroll**
 
-**TODO That actually made a compile time error for wrong types**
+It's unrolling recursion time!
 
-**TODO Note on sizes**
+```cpp
+// For following definition
+IndexOf<int, char, int, double>::value
 
-### `get<T>`
+// Compiler generates
+template<
+    T = int,
+    Types... = char, int, double
+>
+struct IndexOf {
+    static constexpr size_t value = IndexOfImpl<int, 0, char, int, double>::value;
+};
+
+// Now compiler sees dependency on IndexOfImpl<int, 0, char, int, double>::value and will have to generate
+template<
+    Search = int,
+    Idx = 0,
+    T = char,
+    Types... = int, double
+>
+struct IndexOfImpl {
+    static constexpr size_t value = IndexOfImpl<int, 1, int, double>::value;
+};
+
+// Now compiler sees dependency on IndexOfImpl<int, 1, int, double>::value
+// And it also matches this specialization: struct IndexOfImpl<Search, Idx, Search, Types...>, so it's used for generation
+template<
+    Search=int,
+    Idx = 1,
+    Types... = double>
+struct IndexOfImpl<
+    Search = int,
+    Idx = 1,
+    Search = int,
+    Types... = double
+> {
+    static constexpr size_t value = 1;
+};
+
+// Now recursion stopped and we got the value
+IndexOf<int, char, int, double>::value == IndexOfImpl<int, 1, int, double>::value == 1
+```
+
+`IndexOf` works and it gave us bonus feature. Now constructor forbids types not present in `Types...` - `IndexOf<int, char, double>` recursion stops with compile error. That's because when `Types...` sequence ends it doesn't provide explicit `typename T` template requires.
+
+```cpp
+template<
+    Search=int,
+    Idx = 2,
+    T = ???
+>
+struct IndexOfImpl;
+```
+
+**TODO Note that our variant bigger than std::variant**
+
+### `get_if<T>`
 Now that we have `IndexOf` implemented and type index stored, `get<T>` becomes rather easy to implement.
 ```cpp
-template<typename U>
-U& get() {
-    if (IndexOf<U, Types...>::value == type_idx_) {
-        return *any_cast<U>();
-    } else {
+template<typename T>
+T* get_if() {
+    if (IndexOf<T, Types...>::value != type_idx_) {
         throw std::runtime_error("Type is not right"); // bad_variant_access is in <variant> header
+    } else {
+        return *any_cast<T>();
     }
 }
 ```
 
-Return type for template functions is not an easy thing to get right. For example, what if we have `Variant<int&>`? Then `U&` actually becomes `int&&` and that's not what we want. Luckily for us we don't need to think about this, because `std::variant` forbids references, array types and `void*`.
+Return type for template functions is not an easy thing to get right. For example, what if we have `Variant<int&>`? Then `T&` actually becomes `int&*` and that's not what we wanted. Luckily for us we don't need to think about this, because `std::variant` forbids references, array types and `void*`. But, just to be safe - let's use helpful type_trait `std::add_pointer_t` for return type.
 
-Now we can turn implemented `get` to free function, that accepts `Variant<Types...>` as a parameter.
 ```cpp
-template<typename U, typename... Args>
-U& get(Variant<Args...>& variant) {
-    if (IndexOf<U, Types...>::value == variant.type_idx_) { // check that index is right
-        return *variant. template any_cast<U>();
-    } else {                                                // if not - throw error
-        throw std::runtime_error("Type is not right");      // it's not bad_variant_access, because it's in the <variant> header
-    }
+template<typename T>
+std::add_pointer_t<T> get_if();
+```
+
+We'll also have to deal with constant version of `get_if`. How do we do that?
+
+### `get_if<T>() const`
+The obvious idea is to copy paste and change code, so const works. `get_if() const` requires only chage in declaration, the implementation may stay the same.
+```cpp
+template<typename T>
+std::add_pointer_t<const T> get_if() const;
+```
+
+But it calls `any_cast`, so we'll also need constant version of that.
+
+```cpp
+template<typename T>
+const T* any_cast() {
+    return *static_cast<const T*>(static_cast<void*>(storage_.data()));
 }
 ```
 
-The only odd thing here is `variant. template`.
+Now it works, but can we do better, without code duplication? Basically, what we want is to either call `get_if() const` from `get_if` or vice versa. Vice versa is actually forbidden by compiler, so let's proceed with first option. Naive take leads to compile error.
+
+```cpp
+template<typename T>
+std::add_pointer_t<T> get_if() {
+    const auto* cthis = this;
+    return cthis->get_if<T>();  // OOPS `const T*` is not convertible to `T*`
+}
+```
+
+Will `const_cast` help us with the compiler error?
+
+```cpp
+template<typename T>
+std::add_pointer_t<T> get_if() {
+    const auto* cthis = this;
+    return const_cast<std::add_pointer_t<T>>(cthis->get_if<T>());
+}
+```
+
+Yes it helped, but is it legal? Answer to this question depends on the context of `const_cast` usage. It's leagal to cast away constness from pointer or reference, when the originally referenced object was not `const`.
+
+```cpp
+int x = 0;
+const int* cptr_x = &x;
+int* ptr_x = const_cast<int*>(cptr_x); // perfectly legal because x is orginally non-const
+
+const int y = 0;
+const int* cptr_y = &y;
+int* ptr_y = const_cast<int*>(cptr_y); // OOPS undefined because y is originally const
+```
+
+This makes `const_cast` legal in our case. Because non-constant version of `get_if` can be only called with non-const object.
+
+```cpp
+Variant<int> x {1};
+x.get_if<int>(); // calls const_cast, but original memory is non-const
+
+const Variant<int> y {1};
+y.get_if<int>(); // calls get_if() const, so no const cast
+
+Variant<int>& ref_y = y; // compiler error
+ref_y.get_if<int>();     // won't get there
+```
+
+In order to really break our code, one must to call illegal `const_cast` before `get_if` call, so it's not out problem.
+
+```cpp
+const Variant<int> y {1};
+
+Variant<int>& ref_y = const_cast<Variant<int>&>(y); // OOPS UB - casting away constness of orginally const object
+ref_y.get_if<int>();                                // illegal `const_cast` here doesn't matter
+```
+
+We can also get rid of non-const `any_cast`, because now it just calls `get_if() const`.
+How do we turn`get_if` to free function, that accepts `Variant<Types...>` as a parameter?
+
+### free
+
+```cpp
+template<typename T, typename... Args>
+std::add_pointer_t<const T> get_if(const Variant<Args...>* variant) {
+    if(variant == nullptr || IndexOf<T, Args...>::value != variant->type_idx_) {
+        return nullptr;
+    } else {
+        return variant-> template any_cast<T>();
+    }
+}
+
+template<typename T, typename... Args>
+std::add_pointer_t<T> get_if(Variant<Args...>* variant) {
+    const auto* cvariant = variant;
+    return const_cast<std::add_pointer_t<T>>(get_if<T>(cvariant));
+}
+```
+
+We had to add `nullptr` check and this quirk with `variant-> template`.
 **TODO A bit of explanation on that**.
 
-`get` needs to access `Variant`'s private section, so we'll need to declare it as friend. This is actually pretty straightforward if you don't try to overthink it and just copy to class:
+`get_if` needs to access `Variant`'s private section, so it needs to be declared friend. This is actually pretty straightforward if you don't try to overthink it and just copy to class:
 
 ```cpp
 template<typename... Types>
 class Variant {
-    template<typename U, typename... Args>
-    friend U& get(Variant<Args...>& variant);
+    template<typename T, typename... Args>
+    std::add_pointer_t<const T> get_if(const Variant<Args...>* variant);
 };
 ```
-We can't actually use `Types...` from Variant declaration. **TODO Explain linker error**
+
+`Types...` from `Variant`'s can't be used for declaration.
+**TODO Explain linker error**
+
+Non-const version of `get_if` doesn't need to be declaraed as friend, because it just calls const `get_if`. So that's the only friend declaration we'll need.
+
+Ok, so what's about other indexed version of `get_if`?
+
+### `get_if<index>`
+It can be built using `get_if<T>` if `T` can be deduced from index.
+
+```cpp
+template<size_t Idx, typename... Args>
+std::add_pointer_t<const T> get_if(const Variant<Args...>* variant) {
+    return get<T>(variant);
+}
+```
+
+Let's find a way to get type from the sequnce of `Args...` by index. We'll call it `TypeAtIdx`.
+
+```cpp
+template<size_t Idx, size_t CurIdx, typename U, typename... Types>
+struct TypeAtIdxImpl {
+    using type = TypeAtIdxImpl<Idx, CurIdx + 1, Types...>;
+};
+
+template<size_t Idx, typename U, typename... Types>
+struct TypeAtIdxImpl<Idx, Idx, U, Types...> {
+    using type = U;
+};
+
+template<size_t Idx, typename... Types>
+struct TypeAtIdx {
+    using type = typename TypeAtIdxImpl<Idx, 0, Types...>::type;
+};
+```
+
+**TODO unroll recursion**
+
+Now we can fill in gaps and don't forget to prefix every `TypeAtIdx` with `typename`, so compiler understands.
+```cpp
+template<size_t Idx>
+std::add_pointer_t<
+    const TypeAtIdx<Idx, Types...>::type
+> get_if(const Variant<Args...>* variant) {
+    using T = typename TypeAtIdx<Idx, Types...>::type;
+    return get_if<T>(variant);
+}
+```
+That kinda leaks our implementation detail `TypeAtIdx` to the public interface of `Variant`.
+
+**TODO VariantAlternative**
+
+### get
 
 The documentation has 4 overloads of function get:
 ```cpp
-template<typename U, typename... Args>
-U& get(Variant<Args...>& variant);
-U&& get(Variant<Args...>&& variant);
-const U& get(const Variant<Args...>& variant);
-const U&& get(const Variant<Args...>&& variant);
+template<typename T, typename... Args>
+T& get(Variant<Args...>& variant);
+T&& get(Variant<Args...>&& variant);
+const T& get(const Variant<Args...>& variant);
+const T&& get(const Variant<Args...>&& variant);
 ```
+
+**TODO what the hell is T&&?**
+**TODO rework all text**
 We could potentially just copy-paste code with some tweaks for `const`, but I hope we'd all prefer some code reuse. Ideally, to implement logic in just one function and call it in three others. Which one is the only to be called?
 
 ### `get<T>` overloads
@@ -350,15 +554,6 @@ int& lref(int& x) {
 ```
 The trick is, that sometimes this code is perfectly legal and sometimes causes UB. It depends on what `clref` function does. How so? Standard says, that it's legal to drop constness of object, which was not const in creation, and it's illegal if it was.
 
-```cpp
-int x = 0;
-const int& clref_x = x;
-int& lref_x = const_cast<int&>(clref_x); // perfectly legal because is orginally non-const
-
-const int y = 0;
-const int& clref_y = y;
-int& lref_y = const_cast<int&>(clref_y); // OOPS undefined because y is originally const
-```
 Returning to our example with `lref` function calling `clref`. If we are sure, that `clref` operates only on object x that we passed - it's perfectly legal to cast away `const`.
 
 ```cpp
@@ -372,55 +567,6 @@ int& lref(int& x) {
 ```
 And that's exactly our case with `get` function. So that means we may only implement const reference version and call it from every other. How do we do it?
 
-### `get<T>(const Variant&)`
-
-**TODO explain here**
-
-How do we do `get<index>`?
-
-### get<index>
-`get<index>` can be build usig from `get<U>` if `U` can be deduced using index.
-
-```cpp
-template<size_t Idx, typename... Args>
-const ???& get(const Variant<Args...>& variant) {
-    return get<???>(variant);
-}
-```
-
-Let's find a way to get type from the sequnce of `Args...` by index. We'll call it `TypeAtIdx`.
-
-```cpp
-template<size_t Idx, size_t CurIdx, typename T, typename... Types>
-struct TypeAtIdxImpl {
-    using type = TypeAtIdxImpl<Idx, CurIdx + 1, Types...>;
-};
-
-template<size_t Idx, typename T, typename... Types>
-struct TypeAtIdxImpl<Idx, Idx, T, Types...> {
-    using type = T;
-};
-
-template<size_t Idx, typename... Types>
-struct TypeAtIdx {
-    using type = typename TypeAtIdxImpl<Idx, 0, Types...>::type;
-};
-```
-
-**TODO unroll recursion**
-
-Now we can fill in gaps and don't forget to prefix every `TypeAtIdx` with `typename`, so compiler understands.
-```cpp
-template<size_t Idx>
-const typename TypeAtIdx<Idx, Types...>::type& get(const Variant<Args...>& variant) {
-    using U = typename TypeAtIdx<Idx, Types...>::type;
-    return get<U>(variant);
-}
-```
-That kinda leaks our implementation detail `TypeAtIdx` to the public interface of `Variant`.
-
-**TODO VariantAlternative**
-Declare before, release after.
 
 ## Destruction
 Let's address another problem, that `Variant`'s constructor introduced. Placement new can't be cleaned up with simple `delete` call. Code must explictly call appropiate destructor.
@@ -471,7 +617,7 @@ void destroy() {
     }
 }
 ```
-Compiler can't predict, that this function never actually hits the line `destroy<1>();`. Compiler will try to generate `destroy<1>`. And this leads to error.
+Compiler can't predict, that this function never actually hits the line `destroy<1>();`, so compiler must generate `destroy<1>`. And this leads to error.
 
 ```cpp
 template<1>
@@ -512,17 +658,19 @@ void destroy() {}
 ### Index
 ### HoldsAlternative
 ### VariantSize
-### GetIf
 ### Default constructor
+### Swap
+
 Okay, so now we actually have a pretty neat little `Variant`. It has proper construction and destruction. The stored value can be type-safely retrieved and modified. But there are two big missing parts. Our `Variant` can't be copied or moved. And the typed of stored value is decided on creation and can't be changed later.
 **TODO connected to exception safety and that's where we'll start our part II**
-
-### Visit
-### Swap
 
 ### Part II
 ### operator=(T), emplace & ValuelessByException
 ### ExceptionSafety
-### DefaultConstructible & monostate
+### Comparison
+### Visit
+It's just too complicated signature
+### `Variant<int, int, int>`
+Very interesting thing, Idx must check for index.
 ### Hash
-### Variant<int, int, int>`
+hash is connecte to type_idx_, so we'll need to explain above
