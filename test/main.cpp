@@ -1,9 +1,11 @@
 #include "../variant_i.hpp"
+#include "../variant_ii.hpp"
 
 #include <any>
 #include <cassert>
 #include <cstdint>
 #include <iostream>
+#include <memory>
 #include <type_traits>
 #include <variant>
 
@@ -23,24 +25,6 @@ static_assert(VariantSizeV<Variant<int, float, double>> == 3);
 static_assert(VariantSizeV<Variant<std::monostate, void>> == 2);
 static_assert(VariantSizeV<Variant<const int, const float>> == 2);
 static_assert(VariantSizeV<Variant<std::variant<std::any>>> == 1);
-
-template<typename Get, typename Variant, typename Check=void>
-struct TestGet {
-    static void test() {
-        std::cout << "ok";
-    }
-};
-
-template<
-    typename Get,
-    typename... Args
->
-struct TestGet<Get, std::variant<Args...>, decltype(get<Get>(std::declval<std::variant<Args...>>()))> {
-    static void test() {
-        std::cout << "notok";
-        assert(false);
-    }
-};
 } // namespace static_test
 
 template <template<typename...> typename V>
@@ -56,40 +40,41 @@ void constructible_from_value() {
 
 template <template<typename...> typename V>
 void calls_copy_constructor() {
-    struct Value {
-        Value(bool& constructed)
-        :constructed(constructed) {}
+    struct CopyOnlyValue {
+        CopyOnlyValue(int& constructed)
+        : constructed(constructed) {}
 
-        Value(const Value& other)
-        :constructed(other.constructed) {
-            constructed = true;
+        CopyOnlyValue(const CopyOnlyValue& other)
+        : constructed(other.constructed) {
+            ++constructed;
         }
 
-        bool& constructed;
+        int& constructed;
     };
-    bool constructed = false;
-    V<char, Value> x{Value{constructed}};
-    assert(constructed);
+    int constructed = 0;
+    CopyOnlyValue value{constructed};
+    V<char, CopyOnlyValue> x{value};
+    assert(constructed == 1);
     assert(x.index() == 1);
     std::cout << "OK calls_copy_constructor\n";
 }
 
 template <template<typename...> typename V>
 void calls_move_constructor() {
-    struct Value {
-        Value(bool& constructed)
-        :constructed(constructed) {}
+    struct MoveOnlyValue {
+        MoveOnlyValue(int& constructed)
+        : constructed(constructed) {}
 
-        Value(Value&& other)
-        :constructed(other.constructed) {
-            constructed = true;
+        MoveOnlyValue(MoveOnlyValue&& other)
+        : constructed(other.constructed) {
+            ++constructed;
         }
 
-        bool& constructed;
+        int& constructed;
     };
-    bool constructed = false;
-    V<char, Value> x{Value{constructed}};
-    assert(constructed);
+    int constructed = 0;
+    V<char, MoveOnlyValue> x{MoveOnlyValue{constructed}};
+    assert(constructed == 1);
     assert(x.index() == 1);
     std::cout << "OK calls_move_constructor\n";
 }
@@ -220,10 +205,15 @@ struct TestName<variant_i::Variant> {
     inline static const std::string name = "variant_i::Variant";
 };
 
+template<>
+struct TestName<variant_ii::Variant> {
+    inline static const std::string name = "variant_ii::Variant";
+};
+
 template <template<typename...> typename V>
-struct Test {
+struct TestI {
     static void test () {
-        std::cout << "start test " << TestName<V>::name << "\n";
+        std::cout << "start TestI " << TestName<V>::name << "\n";
         static_test();
         calls_copy_constructor<V>();
         calls_move_constructor<V>();
@@ -236,7 +226,7 @@ struct Test {
         default_constructible<V>();
         holds_alternative_works<V>();
         swap_works<V>();
-        std::cout << "end test " << TestName<V>::name << "\n" << std::endl;
+        std::cout << "end TestI " << TestName<V>::name << "\n" << std::endl;
     }
 
 private:
@@ -252,22 +242,198 @@ private:
         static_assert(std::is_same_v<decltype(get<0>(const_lvalue_ref())), const int&>);
         static_assert(std::is_same_v<decltype(get<0>(std::declval<V<int>>())), int&&>);
         static_assert(std::is_same_v<decltype(get<0>(const_rvalue_ref())), const int&&>);
+        static_assert(std::is_default_constructible_v<V<int>>);
+
+        struct Value {
+            Value() = delete;
+        };
+        static_assert(std::is_default_constructible_v<V<std::monostate, Value>>);
+        // static_assert(!std::is_default_constructible_v<V<Value>>);
         std::cout << "OK static_test\n";
     }
 };
 
 template <template<typename...> typename V, template<typename...> typename... Variants>
-struct TestAll {
+struct TestSuiteI {
     static void test() {
-        Test<V>::test();
-        TestAll<Variants...>::test();
+        TestI<V>::test();
+        TestSuiteI<Variants...>::test();
     }
 };
 
 template<template<typename...> typename V>
-struct TestAll<V> {
+struct TestSuiteI<V> {
     static void test() {
-        Test<V>::test();
+        TestI<V>::test();
+    }
+};
+
+template <template<typename...> typename V>
+void copy_constructible() {
+    using namespace std;
+    using namespace variant_i;
+    auto orig = make_shared<int>(1);
+    V<shared_ptr<int>> x{orig};
+    assert(get<shared_ptr<int>>(x).use_count() == 2);
+    assert(get<shared_ptr<int>>(x) == orig);
+    {
+        auto y = x;
+        assert(get<shared_ptr<int>>(x) == get<shared_ptr<int>>(y));
+        assert(orig.use_count() == 3);
+        assert(get<shared_ptr<int>>(x).use_count() == 3);
+        assert(get<shared_ptr<int>>(y).use_count() == 3);
+    }
+    assert(orig.use_count() == 2);
+    assert(get<shared_ptr<int>>(x).use_count() == 2);
+    std::cout << "OK copy_constructible\n";
+}
+
+template <template<typename...> typename V>
+void move_constructible() {
+    using namespace std;
+    using namespace variant_i;
+    auto orig = make_unique<int>(1);
+    V<unique_ptr<int>> x{std::move(orig)};
+    assert(*get<0>(x) == 1);
+    {
+        auto y = std::move(x);
+        assert(*get<0>(y) == 1);
+    }
+    std::cout << "OK move_constructible\n";
+}
+
+template <template<typename...> typename V>
+void copy_assignable() {
+    using namespace std;
+    using namespace variant_i;
+    struct Value {
+        ~Value() {
+            if (destructed) {
+                *destructed = true;
+            }
+        }
+        bool* destructed = nullptr;
+    };
+    struct CopyAssignableValue {
+        CopyAssignableValue(int& constructed)
+        : constructed(constructed) {}
+
+        CopyAssignableValue& operator=(const CopyAssignableValue& other) {
+            ++constructed;
+            return *this;
+        }
+
+        int& constructed;
+    };
+    bool destructed = false;
+    V<Value, CopyAssignableValue> x {};
+    get<0>(x).destructed = &destructed;
+    int constructed = 0;
+    V<Value, CopyAssignableValue> y {CopyAssignableValue{constructed}};
+    x = y;
+    assert(destructed);
+    assert(x.index() == 1);
+    // assert(constructed == 1);
+    std::cout << "OK copy_assignable\n";
+}
+
+template <template<typename...> typename V>
+void move_assignable() {
+    using namespace std;
+    using namespace variant_i;
+    struct Value {
+        ~Value() {
+            if (destructed) {
+                *destructed = true;
+            }
+        }
+        bool* destructed = nullptr;
+    };
+    struct MoveAssignableValue {
+        MoveAssignableValue(int& constructed)
+        : constructed(constructed) {}
+
+        MoveAssignableValue(MoveAssignableValue&& other)
+        :constructed{other.constructed} {}
+
+        MoveAssignableValue& operator=(MoveAssignableValue&& other) {
+            ++constructed;
+            return *this;
+        }
+
+        int& constructed;
+    };
+    bool destructed = false;
+    V<Value, MoveAssignableValue> x {};
+    int constructed = 0;
+    get<0>(x).destructed = &destructed;
+    V<Value, MoveAssignableValue> y{MoveAssignableValue{constructed}};
+    x = std::move(y);
+    assert(destructed);
+    assert(x.index() == 1);
+    std::cout << "OK move_assignable\n";
+}
+
+template <template<typename...> typename V>
+void emplace_valueless_by_exception() {
+    struct Value {
+        Value(int, char) {
+            throw std::runtime_error("Throw on construct");
+        }
+    };
+    {
+        V<int, Value> x {1};
+        try {
+            x.template emplace<1>(1, 'a');
+            assert(false);
+        } catch(const std::runtime_error&) {
+            assert(x.valueless_by_exception());
+        }
+    }
+    {
+        V<int, Value> x {1};
+        try {
+            x.template emplace<Value>(1, 'a');
+            assert(false);
+        } catch(const std::runtime_error&) {
+            assert(x.valueless_by_exception());
+        }
+    }
+    std::cout << "OK emplace_valueless_by_exception\n";
+}
+
+template <template<typename...> typename V>
+struct TestII {
+    static void test() {
+        std::cout << "start TestII " << TestName<V>::name << "\n";
+        copy_constructible<V>();
+        move_constructible<V>();
+        copy_assignable<V>();
+        move_assignable<V>();
+        emplace_valueless_by_exception<V>();
+        std::cout << "end TestII " << TestName<V>::name << "\n";
+    }
+
+    static void static_test() {
+        struct Value {
+            Value() = delete;
+        };
+        static_assert(!std::is_default_constructible_v<V<Value>>);
+    }
+};
+
+template <template<typename...> typename V, template<typename...> typename... Variants>
+struct TestSuiteII {
+    static void test() {
+        TestII<V>::test();
+        TestSuiteII<Variants...>::test();
+    }
+};
+
+template<template<typename...> typename V>
+struct TestSuiteII<V> {
+    static void test() {
+        TestII<V>::test();
     }
 };
 } // namespace test
@@ -340,11 +506,19 @@ struct TestNegative<V<Args...>, decltype(std::get<char>(std::declval<V<Args...>>
 //     static constexpr auto value = std::get<char>(std::declval<V<int>>());
 // };
 
-template<class...>
-constexpr std::false_type always_false{};
+// template<class...>
+// constexpr std::false_type always_false{};
 
+// template<typename T>
+// void f(T&& x) {
+//     TypeCheck<T> y;
+// }
 
 int main() {
     // TypeCheck<decltype()> x;
-    test::TestAll<std::variant, variant_i::Variant>::test();
+    test::TestSuiteI<std::variant, variant_i::Variant, variant_ii::Variant>::test();
+    test::TestSuiteII<std::variant, variant_ii::Variant>::test();
+    // f(x);
+    // variant_ii::Variant<int> x{1};
+    // auto y = x;
 }

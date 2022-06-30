@@ -1,9 +1,10 @@
 #pragma once
 
 #include <array>
+#include <concepts>
 #include <type_traits>
 
-namespace variant_i {
+namespace variant_ii {
 template<typename T, typename... Types>
 struct MaxSizeof {
 private:
@@ -53,16 +54,30 @@ struct VariantAlternative;
 template<size_t Idx, typename T>
 using VariantAlternativeT = typename VariantAlternative<Idx, T>::type;
 
+template<class T, class U>
+concept NotIsSame = !std::is_same_v<U, T>;
+
+template<class T, class U>
+concept Derived = std::is_base_of_v<U, T>;
+
+template<typename T, typename... Types>
+concept VariantConvertible = std::disjunction_v<std::is_convertible<T, Types>...>;
+
+template<typename T>
+concept DefaultConstructible = std::is_default_constructible_v<T>;
+
+inline constexpr size_t variant_npos = -1;
+
 template<typename... Types>
 class Variant {
 public:
-    template<typename T>
+    template<VariantConvertible<Types...> T>
     Variant(T&& var)
     : type_idx_{IndexOf<std::decay_t<T>, Types...>::value} {
         new(storage_.data()) std::decay_t<T>(std::forward<T>(var));
     }
 
-    Variant()
+    Variant() requires DefaultConstructible<typename TypeAtIdx<0, Types...>::type>
     : type_idx_{0} {
         using T = typename TypeAtIdx<0, Types...>::type;
         new(storage_.data()) T();
@@ -72,15 +87,54 @@ public:
         destroy<0>();
     }
 
+    Variant(const Variant& other)
+    :type_idx_{other.type_idx_} {
+        copy_construct<0>(other);
+    }
+
+    Variant(Variant&& other)
+    :type_idx_{other.type_idx_} {
+        move_construct<0>(std::move(other));
+    }
+
+    Variant& operator=(const Variant& other) {
+        auto tmp = other;
+        tmp.swap(*this);
+        return *this;
+    }
+
+    Variant& operator=(Variant&& other) {
+        auto tmp = std::move(other);
+        tmp.swap(*this);
+        return *this;
+    }
+
+    template<size_t Idx, typename... Args>
+    void emplace(Args&&... args) {
+        using T = typename TypeAtIdx<Idx, Types...>::type;
+        type_idx_ = variant_npos;
+        destroy<0>();
+        new(storage_.data()) T(std::forward<Args>(args)...);
+        type_idx_ = Idx;
+    }
+
+    template<typename T, typename... Args>
+    void emplace(Args&&... args) {
+        type_idx_ = variant_npos;
+        destroy<0>();
+        new(storage_.data()) T(std::forward<Args>(args)...);
+        type_idx_ = IndexOf<T, Types...>::value;
+    }
+
     template<size_t Idx, typename... Args>
     friend std::add_pointer_t<const VariantAlternativeT<Idx, Variant<Args...>>> get_if(const Variant<Args...>* variant);
 
-    size_t index() {
+    size_t index() const {
         return type_idx_;
     }
 
-    size_t index() const {
-        return type_idx_;
+    bool valueless_by_exception() const {
+        return type_idx_ == variant_npos;
     }
 
     void swap(Variant& other) {
@@ -106,6 +160,43 @@ private:
 
     template<>
     void destroy<sizeof...(Types)>() {}
+
+    template<size_t Idx>
+    void copy_construct(const Variant& other) {
+        if (Idx != other.type_idx_) {
+            copy_construct<Idx + 1>(other);
+        } else {
+            using T = typename TypeAtIdx<Idx, Types...>::type;
+            new(storage_.data()) T(get<Idx>(other));
+        }
+    }
+
+    template<>
+    void copy_construct<sizeof...(Types)>(const Variant&) {}
+
+    template<size_t Idx>
+    void move_construct(Variant&& other) {
+        if (Idx != other.type_idx_) {
+            move_construct<Idx + 1>(std::move(other));
+        } else {
+            using T = typename TypeAtIdx<Idx, Types...>::type;
+            new(storage_.data()) T(get<Idx>(std::move(other)));
+        }
+    }
+
+    template<>
+    void move_construct<sizeof...(Types)>(Variant&&) {}
+
+    template<size_t Idx>
+    void copy_assign(const Variant& other) {
+        if (Idx == other.type_idx_) {
+            if (other.type_idx_ == type_idx_) {
+                get<Idx>(*this) = get<Idx>(other);
+            } else {
+
+            }
+        }
+    }
 
     size_t type_idx_;
     std::array<std::byte, MaxSizeof<Types...>::value> storage_;
@@ -210,4 +301,4 @@ bool holds_alternative(const Variant<Types...>& v) {
     return v.index() == IndexOf<T, Types...>::value;
 }
 
-} // namespace variant_i
+} // namespace variant_ii

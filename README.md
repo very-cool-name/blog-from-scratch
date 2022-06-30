@@ -234,7 +234,7 @@ template<typename... Types>
 class Variant {
 public:
     template<typename T>
-    Variant(const T& var)
+    Variant(T&& var)
     : type_idx_{IndexOf<T, Types...>::value} {
         new(storage_.data()) T(var);
     }
@@ -320,6 +320,7 @@ template<
 struct IndexOfImpl;
 ```
 
+**TODO `decay_t`**
 **TODO Note that our variant bigger than std::variant**
 
 ### `get_if<T>`
@@ -660,17 +661,42 @@ void destroy() {}
 ### VariantSize
 ### Default constructor
 ### Swap
+### Align
 
 Okay, so now we actually have a pretty neat little `Variant`. It has proper construction and destruction. The stored value can be type-safely retrieved and modified. But there are two big missing parts. Our `Variant` can't be copied or moved. And the typed of stored value is decided on creation and can't be changed later.
 **TODO connected to exception safety and that's where we'll start our part II**
 
-### Part II
+## Part II
+### Emplace
+
+**TODO example with shared_ptr**
+**TODO exception safety**
+### Copy & Move constructor
+**TODO concepts to solve problem with two constructors**
+**copy and move constructors**
+
+```cpp
+    Variant& operator=(Variant&& other) {
+        auto tmp = std::move(other);
+        tmp.swap(*this);
+        return *this;
+    }
+```
+
+### default constructor
+concepts
+
 ### operator=(T), emplace & ValuelessByException
+**operator= with swap trick**
+**operator= for same type**
+**operator= and valueless_vy_exception**
+**concepts for operator= and copy constructors type_traits**
 ### ExceptionSafety
 ### Comparison
 ### Visit
 It's just too complicated signature
 ### `Variant<int, int, int>`
 Very interesting thing, Idx must check for index.
+**TODO get<int>**
 ### Hash
 hash is connecte to type_idx_, so we'll need to explain above
