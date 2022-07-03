@@ -21,27 +21,28 @@ You've probably heard about `union` in C and C++. If you've not - `union` is a w
 ```cpp
 union S
 {
-    std::int32_t big_int;     // occupies 4 bytes
-    std::uint8_t small_int;   // occupies 1 byte
-};                            // the whole union occupies 4 bytes
+    int32_t i; // occupies 32 bits
+    char8_t c; // occupies 8 bits
+};             // the whole union occupies 4 bytes
 
 int main() {
-    S s;                      // uninitialized union
-    s.big_int = 1;            // assign big_int
-    std::cout << s.big_int;   // prints 1
-    s.small_int = 13;         // reassign small_int
-    std::cout << s.small_int; // prints 13
+    S s;                    // uninitialized union
+    std::cout << sizeof(s); // prints 4 (on a system where 1 byte == 8 bit)
+    s.i = 1;                // assign big_int
+    std::cout << s.i;       // prints '1'
+    s.c = 'a';              // reassign small_int
+    std::cout << s.c;       // prints 'a'
 }
 ```
 
-**TODO Picture with memory**
+![union memory layout](img/variant_union.png)
 
 Unfortunately `union` is very easy to misuse:
 
 ```cpp
-S s;                        // uninitialized union
-s.big_int = 1;              // assign big_int
-std::cout << s.small_int;   // OOPS - undefined behaviour
+S s;              // uninitialized union
+s.i = 1;          // assign int32_t
+std::cout << s.c; // OOPS - undefined behaviour
 ```
 
 And as we all know UB is very bad - it happens only in runtime and very hard to catch. There are much more subtle problems with unioin, like the fact that you need to explicitly call proper destructors for more complex types.
@@ -186,8 +187,9 @@ Variant(const T& var) {
 }
 ```
 
-[placement new](https://en.cppreference.com/w/cpp/language/new) can be used to copy construct value inside `Variant`'s storage . Placement new does not allocate memory as ordinary new does. Instead it uses provided chunk of memory and calls constructor of object to initialize it.
-**TODO Picture of placement new vs new**
+[placement new](https://en.cppreference.com/w/cpp/language/new) can be used to copy construct value inside `Variant`'s storage . Placement new does not allocate memory as new does. Instead it uses provided chunk of memory and calls constructor of object to initialize it.
+
+![placement-new-vs-new](img/variant_placement_new.png)
 
 ```cpp
 template<typename T>
