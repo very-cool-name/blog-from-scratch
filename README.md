@@ -198,11 +198,11 @@ Variant(const T& var) {
 }
 ```
 
-You may already see the problem - right now we can place any type `T` inside our storage. Let's continue with implementing ther rest of the interface for now. Other problems'll become obvious and we'll fix them along the way, I promise.
+You may already see the problem - right now we can place any type `T` inside our storage. Let's continue with implementing ther rest of the interface for now. This and other problems'll become obvious and we'll fix them along the way, I promise.
 Next, how do we get the value back from `Variant`?
 
 ## GetIf
-The simplest value we can get from `Variant` is a strongly typed pointer to `storage`. It's tempting to simply cast `storage` to pointer of desired type `T*`. It's legally can be done through two `static_cast` operations.
+The simplest value we can get value from `Variant` is a strongly typed pointer to `storage_`. It's tempting to simply cast `storage_` to a pointer of a desired type `T*` using two `static_cast` operations.
 ```cpp
 template<typename T>
 T* any_cast() {
@@ -214,19 +214,9 @@ T* any_cast() {
 
 Unfortunately it's the same undefined behaviour as with union if we guessed wrong. Coincidentally this function will be useful to us, so let's leave it for now.
 
-In order to avoid UB `get` can return `nullptr` if desired type is wrong. That's why the standard calls this function `get_if`. There're actually two versions of `get_if`: typed and indexed.
+In order to avoid UB `get_if` can call `any_cast` only if guessed type `T` is the type of value in `storage_`. Otherwise `nullptr` is returned. That's why the standard calls this function `get_if`. To do so we'll need to store some type information to check in `get_if`.
 
-```cpp
-std::variant<int, char> v;
-std::get_if<int>(&v); // tries to get variable of type int
-std::get_if<0>(&v);   // tries to get first type, which is also int
-```
-
-**TODO replace with indexed one**
-
-It's a bit more straightforward to implement typed one, so let's start with this one. Later we'll see that it will be our basic building block to implement all `get` functions.
-
-As we've seen before the type info needs to be stored somewhere, so illegal cast is not performed. How do we store type info for `Variant`?
+How do we store type information?
 
 ### Saving type info
 Let's go back to the constructor and use very simple type info - index of the type in the sequence. `size_t` is used for index type, because length of pack `sizeof...(Types..)` has this type. It'll be definetly enough to store our index, so let's use it.
@@ -325,65 +315,187 @@ struct IndexOfImpl;
 **TODO `decay_t`**
 **TODO Note that our variant bigger than std::variant**
 
-### `get_if<T>`
-Now that we have `IndexOf` implemented and type index stored, `get<T>` becomes rather easy to implement.
+Now that we have `type_idx_` stored, we can proceed with `get_if`. Actually there are two versions of it - typed and indexed.
+
 ```cpp
-template<typename T>
-T* get_if() {
-    if (IndexOf<T, Types...>::value != type_idx_) {
-        throw std::runtime_error("Type is not right"); // bad_variant_access is in <variant> header
+std::variant<int, char> v;
+std::get_if<int>(&v); // tries to get variable of type int
+std::get_if<0>(&v);   // tries to get first type, which is also int
+```
+
+**TODO get<index>**
+
+Which one should we implement first? I didn't know about this, but variant allows repeats of the same type. Yes, `variant<int, int, int>` is allowed. In such case `get_if<int>` gives a compile time error because it's not clear which `int` was requested. This makes `get<index>` the basic building block, which works for every kind of variant.
+
+How do we implement `get<index>`?
+
+### `get_if<index>`
+**TODO member vs friend**
+Indexed get is a bit hard to start with, because we can't even write a proper declaration for it.
+
+```cpp
+template<size_t Idx>
+T* get_if(); // what's T?
+```
+
+That's our first goal - to get type `T` at index `Idx` from list of `Types...`.
+
+```cpp
+template<size_t Idx, size_t CurIdx, typename T, typename... Types>
+struct TypeAtIdxImpl {
+    using type = TypeAtIdxImpl<Idx, CurIdx + 1, Types...>::type;
+};
+
+template<size_t Idx, typename T, typename... Types>
+struct TypeAtIdxImpl<Idx, Idx, T, Types...> {
+    using type = Ts;
+};
+
+template<size_t Idx, typename... Types>
+struct TypeAtIdx {
+    using type = typename TypeAtIdxImpl<Idx, 0, Types...>::type;
+};
+
+template<size_t Idx>
+TypeAtIdx<Idx, Types..>::type* get_if();
+```
+
+Is it plane? Is it bird? No, it's variadic recursion.
+
+```cpp
+// For following definition
+TypeAtIdx<1, char, int, double>::type
+
+// Compiler generates
+template<
+    size_t Idx = 1,
+    typename... Types = char, int, double>
+struct TypeAtIdx {
+    using type = typename TypeAtIdxImpl<1, 0, char, int, double>::type;
+};
+
+// Now compiler sees dependecy on typename TypeAtIdxImpl<1, 0, char, int, double>::type
+template<
+    size_t Idx = 1,
+    size_t CurIdx = 0,
+    typename U = char,
+    typename... Types = int, double>
+struct TypeAtIdxImpl {
+    using type = TypeAtIdxImpl<1, 1, int, double>::type;
+};
+
+// Now compiler sees dependecy on typename TypeAtIdxImpl<1, 1, int, double>::type
+// And provided specialization matches
+template<
+    size_t Idx = 1,
+    typename T = int,
+    typename... Types = double>
+struct TypeAtIdxImpl<1, 1, int, double> {
+    using type = int;
+};
+
+// Now recursion stopped and we got the type
+TypeAtIdx<1, char, int, double>::type == TypeAtIdxImpl<1, 0, char, int, double>::type == TypeAtIdxImpl<1, 1, int, double>::type == int
+```
+
+Now that we have `TypeAtIdx`, `get_if` becomes easy to implement.
+
+```cpp
+template<size_t Idx>
+TypeAtIdx<Idx, Types...>::type* get_if() {
+    if(Idx != type_idx_) {
+        return nullptr;
     } else {
-        return *any_cast<T>();
+        using T = TypeAtIdx<Idx, Variant<Args...>>::type;
+        return any_cast<T>();
     }
 }
 ```
 
-Return type for template functions is not an easy thing to get right. For example, what if we have `Variant<int&>`? Then `T&` actually becomes `int&*` and that's not what we wanted. Luckily for us we don't need to think about this, because `std::variant` forbids references, array types and `void*`. But, just to be safe - let's use helpful type_trait `std::add_pointer_t` for return type.
+Let's think about return type a little bit. What if variant holds a reference `Variant<int&>`? Return type of `get_if` becomes `int&*` which is illegal in C++, because it's a pointer to a reference. The better way to convert type to a pointer is `add_pointer_t`. It decays all types correctly, so we'll use it for `get_if` and `any_cast`.
 
 ```cpp
+template<size_t Idx>
+std::add_pointer_t<TypeAtIdx<Idx, Types...>::type> get_if();
+
 template<typename T>
-std::add_pointer_t<T> get_if();
+std::add_pointer_t<T> any_cast();
 ```
 
-We'll also have to deal with constant version of `get_if`. How do we do that?
+I lied to you. `std::variant` is not permitted to hold references, arrays, or the type void. **TODO add_pointer_t is still usefull because of function types**
 
-### `get_if<T>() const`
-The obvious idea is to copy paste and change code, so const works. `get_if() const` requires only chage in declaration, the implementation may stay the same.
+The other thing is we kinda leaked implementation detail which is `TypeAtIdx` to the public interface of `Variant`. `std::variant` has a thing similar to our `TypeAtIdx` called `variant_alternative_t`. It's used as a return type for `std::get_if`. The difference from `TypeAtIdx` is that `variant_alternative_t` implemented only for `std::variant`, and not for any sequence of types. It's quite simple to build our own `VariantAlteernativeT` using `TypeAtIdx`.
+
 ```cpp
-template<typename T>
-std::add_pointer_t<const T> get_if() const;
+template<size_t Idx, typename T>
+struct VariantAlternative;
+
+template<size_t Idx, typename T>
+using VariantAlternativeT = typename VariantAlternative<Idx, T>::type;
+
+// VariantAlternative must be declared before Variant to be used internally
+template<typename... Types>
+class Variant {
+    std::add_pointer_t<VariantAlternativeT<Idx, Variant<Types...>>> get_if();
+};
+
+// VariantAlternative specialization for Variant must be defined after Variant's definition
+template<size_t Idx, typename... Types>
+struct VariantAlternative<Idx, Variant<Types...>> {
+    using type = typename TypeAtIdx<Idx, Types...>::type; // forward all the work to TypeAtIdx
+};
 ```
 
-But it calls `any_cast`, so we'll also need constant version of that.
+If you're confused about ordering, don't worry I'm with you. But I think it works because when user tries to use `get_if` the compiler sees all the declarations and definitions required to compile.
+
+Okay that was a lot. Now we have a problem with constant `Variant`.
+
+```cpp
+const Variant<int> x{1};
+x.get_if<0>(); // get_if is not constant
+```
+
+How do we implement `get_if<index>() const`?
+
+### `get_if<index>() const`
+The obvious idea is to copy-paste and add `const`s. `get_if() const` requires only chage in declaration, the implementation may stay the same.
+
+```cpp
+template<size_t Idx>
+std::add_pointer_t<const VariantAlternativeT<Idx, Variant<Types...>>> get_if() const;
+```
+
+It calls `any_cast`, so we'll also need a constant version of that.
 
 ```cpp
 template<typename T>
-const T* any_cast() {
+const T* any_cast() const {
     return *static_cast<const T*>(static_cast<void*>(storage_.data()));
 }
 ```
 
-Now it works, but can we do better, without code duplication? Basically, what we want is to either call `get_if() const` from `get_if` or vice versa. Vice versa is actually forbidden by compiler, so let's proceed with first option. Naive take leads to compile error.
+Now it works, but can we do better, without code duplication? Basically, what we want is to either call `get_if() const` from `get_if` or vice versa. Vice versa is forbidden by compilers, so let's proceed with the first option. Naive take leads to compile error.
 
 ```cpp
-template<typename T>
-std::add_pointer_t<T> get_if() {
+template<size_t Idx>
+std::add_pointer_t<VariantAlternativeT<Idx, Variant<Types...>>> get_if() {
     const auto* cthis = this;
-    return cthis->get_if<T>();  // OOPS `const T*` is not convertible to `T*`
+    return cthis->get_if<Idx>();  // OOPS `const T*` is not convertible to `T*`
 }
 ```
 
 Will `const_cast` help us with the compiler error?
 
 ```cpp
-template<typename T>
-std::add_pointer_t<T> get_if() {
+template<size_t Idx>
+std::add_pointer_t<VariantAlternativeT<Idx, Variant<Types...>>> get_if() {
+    using T = VariantAlternativeT<Idx, Variant<Types...>>;
     const auto* cthis = this;
-    return const_cast<std::add_pointer_t<T>>(cthis->get_if<T>());
+    return const_cast<std::add_pointer_t<T>>(cthis->get_if<Idx>());
 }
 ```
 
-Yes it helped, but is it legal? Answer to this question depends on the context of `const_cast` usage. It's leagal to cast away constness from pointer or reference, when the originally referenced object was not `const`.
+Yes it helped, but does it cause undefined behaviour? Answer to this question depends on the context of `const_cast` usage. It's legal to cast away constness from pointer or reference, when the originally referenced object was not `const`.
 
 ```cpp
 int x = 0;
@@ -395,7 +507,7 @@ const int* cptr_y = &y;
 int* ptr_y = const_cast<int*>(cptr_y); // OOPS undefined because y is originally const
 ```
 
-This makes `const_cast` legal in our case. Because non-constant version of `get_if` can be only called with non-const object.
+This makes `const_cast` legal in our case, because non-constant version of `get_if` can be only called with non-const object.
 
 ```cpp
 Variant<int> x {1};
@@ -408,7 +520,7 @@ Variant<int>& ref_y = y; // compiler error
 ref_y.get_if<int>();     // won't get there
 ```
 
-In order to really break our code, one must to call illegal `const_cast` before `get_if` call, so it's not out problem.
+In order to cause UB in `Variant`'s code, one must call illegal `const_cast` before `get_if`, so it's not out problem.
 
 ```cpp
 const Variant<int> y {1};
@@ -417,92 +529,87 @@ Variant<int>& ref_y = const_cast<Variant<int>&>(y); // OOPS UB - casting away co
 ref_y.get_if<int>();                                // illegal `const_cast` here doesn't matter
 ```
 
-We can also get rid of non-const `any_cast`, because now it just calls `get_if() const`.
-How do we turn`get_if` to free function, that accepts `Variant<Types...>` as a parameter?
+We can also get rid of non-const `any_cast`, because now `get_if()` just calls `get_if() const`.
+
+How do we turn `get_if` to free function, that accepts `Variant<Types...>` as a parameter?
 
 ### free
 
 ```cpp
-template<typename T, typename... Args>
-std::add_pointer_t<const T> get_if(const Variant<Args...>* variant) {
-    if(variant == nullptr || IndexOf<T, Args...>::value != variant->type_idx_) {
+template<size_t Idx, typename... Args>
+std::add_pointer_t<const VariantAlternativeT<Idx, Variant<Args...>>> get_if(const Variant<Args...>* variant) {
+    if(variant == nullptr || Idx != variant->type_idx_) {
         return nullptr;
     } else {
         return variant-> template any_cast<T>();
     }
 }
 
-template<typename T, typename... Args>
-std::add_pointer_t<T> get_if(Variant<Args...>* variant) {
+template<size_t Idx, typename... Args>
+std::add_pointer_t<VariantAlternativeT<Idx, Variant<Args...>>> get_if(Variant<Args...>* variant) {
+    using T = VariantAlternativeT<Idx, Variant<Types...>>;
     const auto* cvariant = variant;
-    return const_cast<std::add_pointer_t<T>>(get_if<T>(cvariant));
+    return const_cast<std::add_pointer_t<T>>(get_if<Idx>(cvariant));
 }
 ```
 
-We had to add `nullptr` check and this quirk with `variant-> template`.
-**TODO A bit of explanation on that**.
+We had to add `nullptr` check and this quirk with `variant-> template any_cast`. From my point of view it does not make sense for compiler to require `template` here, so let me give you an example where it makes sense.
 
-`get_if` needs to access `Variant`'s private section, so it needs to be declared friend. This is actually pretty straightforward if you don't try to overthink it and just copy to class:
+```cpp
+variant->func<0>(13);
+// compiler can't tell whether it's call to a function or something like
+(variant->func < 0) > (13)
+// so compiler requires explicit `template` keyword to be sure, that it's a call to a template function
+variant-> template func<0>(13);
+```
+
+In the case of `get_if` the second option is even weirder `(variant->any_cast < T) > ()`. `T` is a type and there is no comparison operator for types as far as I know. The rest of the line also gives more questions - what the hell is `> ()`? I don't know why compiler requires `template` in our case, but we'll let it to have this one.
+
+To finalize our work with `get_if<index>` let's make it a free function, like in the standard.
+
+### free
+
+`get_if` needs to access `Variant`'s private section, so it needs to be declared friend. This is actually pretty straightforward if you don't try to overthink it and just copy to class.
 
 ```cpp
 template<typename... Types>
 class Variant {
-    template<typename T, typename... Args>
-    std::add_pointer_t<const T> get_if(const Variant<Args...>* variant);
+    template<size_t Idx, typename... Args>
+    friend std::add_pointer_t<const VariantAlternativeT<Idx, Variant<Args...>>> get_if(const Variant<Args...>* variant);
 };
 ```
 
-`Types...` from `Variant`'s can't be used for declaration.
-**TODO Explain linker error**
-
-Non-const version of `get_if` doesn't need to be declaraed as friend, because it just calls const `get_if`. So that's the only friend declaration we'll need.
-
-Ok, so what's about other indexed version of `get_if`?
-
-### `get_if<index>`
-It can be built using `get_if<T>` if `T` can be deduced from index.
+`Types...` from `Variant`'s can't be used for friend declaration because linker will complain, that it can't find right function to call. And linker is right, cosider these two functions.
 
 ```cpp
-template<size_t Idx, typename... Args>
-std::add_pointer_t<const T> get_if(const Variant<Args...>* variant) {
-    return get<T>(variant);
+template<typename... Types>
+class Variant {
+    friend void function1(const Variant<Types...>* variant);
+};
+
+template<typename... Args>
+void function2(const Variant<Args...>* variant)
+```
+
+They have two different signatures. `functionn1` is a template function with it's own parameter pack. `function2` is a weird thing, that just uses parameter pack of class, even though it has not relation to it. So it doesn't pay off to be smart here and reuse `Varaint`'s parameter pack.
+
+Non-const version of `get_if` doesn't need to be declaraed friend, because it just calls const `get_if`. So that's the only friend declaration we'll need. Neat.
+
+Ok, so what's about other typed version of `get_if`?
+
+### `get_if<T>`
+
+Now that we have `IndexOf` implemented and type index stored, `get<T>` becomes rather easy to implement.
+```cpp
+template<typename T>
+T* get_if() {
+    if (IndexOf<T, Types...>::value != type_idx_) {
+        throw std::runtime_error("Type is not right"); // bad_variant_access is in <variant> header
+    } else {
+        return *any_cast<T>();
+    }
 }
 ```
-
-Let's find a way to get type from the sequnce of `Args...` by index. We'll call it `TypeAtIdx`.
-
-```cpp
-template<size_t Idx, size_t CurIdx, typename U, typename... Types>
-struct TypeAtIdxImpl {
-    using type = TypeAtIdxImpl<Idx, CurIdx + 1, Types...>;
-};
-
-template<size_t Idx, typename U, typename... Types>
-struct TypeAtIdxImpl<Idx, Idx, U, Types...> {
-    using type = U;
-};
-
-template<size_t Idx, typename... Types>
-struct TypeAtIdx {
-    using type = typename TypeAtIdxImpl<Idx, 0, Types...>::type;
-};
-```
-
-**TODO unroll recursion**
-
-Now we can fill in gaps and don't forget to prefix every `TypeAtIdx` with `typename`, so compiler understands.
-```cpp
-template<size_t Idx>
-std::add_pointer_t<
-    const TypeAtIdx<Idx, Types...>::type
-> get_if(const Variant<Args...>* variant) {
-    using T = typename TypeAtIdx<Idx, Types...>::type;
-    return get_if<T>(variant);
-}
-```
-That kinda leaks our implementation detail `TypeAtIdx` to the public interface of `Variant`.
-
-**TODO VariantAlternative**
 
 ### get
 
