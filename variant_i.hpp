@@ -191,8 +191,7 @@ T&& get(Variant<Args...>&& variant) {
 
 template<typename T, typename... Args>
 const T&& get(const Variant<Args...>&& variant) {
-    const auto& cvariant = variant;
-    return std::move(get<T>(cvariant));
+    return std::move(get<T>(std::move(variant)));
 }
 
 template<typename T>

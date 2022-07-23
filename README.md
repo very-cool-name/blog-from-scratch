@@ -15,8 +15,7 @@ I think the best way to work with this text is to start building `std::variant` 
 # What is variant?
 
 ## Union
-**TODO wording**
-You've probably heard about `union` in C and C++. If you've not - `union` is a way to reuse same storage for different types. It holds several types on stack. The size of stack space used is only as large as the maximum of said types.
+You've probably heard about `union` in C and C++. If you've not - `union` is a way to reuse same **stack** storage for different types. The size of stack space used is only as large as the maximum of said types.
 
 ```cpp
 union S
@@ -29,7 +28,7 @@ int main() {
     S s;                    // uninitialized union
     std::cout << sizeof(s); // prints 4 (on a system where 1 byte == 8 bit)
     s.i = 1;                // assign big_int
-    std::cout << s.i;       // prints '1'
+    std::cout << s.i;       // prints '1's
     s.c = 'a';              // reassign small_int
     std::cout << s.c;       // prints 'a'
 }
@@ -52,18 +51,19 @@ You might be wondering why would anyone ever want to share space between types. 
 2. Bit trickery
 3. Different way to handle polymorphism
 
-**TODO Example with json, maybe**
+The 3-rd point can be illustrated with implementation of `JsonValue`. For simplicity our `JsonValue` holds one of integer, string or other `JsonValue`.
 
-The danger of using union actually makes 3-rd point much underappreciated. And all the danger boils down to the fact, that `union` make the user do all type bookkeeping. That's exactly what `std::variant` saves user from.
+**TODO goto doc**
+
+The danger of using union actually makes usage of `union` for polymorphism much underappreciated. And all the danger boils down to the fact, that `union` make the user do all type bookkeeping. That's exactly what `std::variant` saves user from.
 
 ## Variant
 `std::variant` uses some extra space to hold type information, so it prevents illegal access by throwing `std::bad_varaint_access`.
 
-**TODO How does variant deecides between two integers?**
 ```cpp
 int main() {
-    std::variant<std::int32_t, std::uint8_t> v{1}; // variant now holds std::int32_t{1}
-    std::cout << std::get<std::uint8_t>(v);        // std::bad_variant_access
+    std::variant<int32_t, char8_t> v{1}; // variant now holds int32_t{1}
+    std::cout << std::get<char8_t>(v);   // throws std::bad_variant_access
 }
 ```
 
@@ -71,15 +71,15 @@ If the type is not from expected list of types, error is actually compile time!
 
 ```cpp
 int main() {
-    std::variant<std::int32_t, std::uint8_t> v{1}; // variant now holds std::int32_t{1}
-    std::cout << std::get<char>(v);                // compile time error
+    std::variant<int32_t, char8_t> v{1}; // variant now holds int32_t{1}
+    std::cout << std::get<floats>(v);      // compile time error
 }
 ```
 
 Safety has a cost and `variant` is slightyly bigger than union, because it has to store type information somewhere.
 
 ```cpp
-std::cout << sizeof(S) << "\n" << sizeof(std::variant<std::int32_t, std::uint8_t>) << std::endl;
+std::cout << sizeof(S) << "\n" << sizeof(std::variant<int32_t, char8_t>) << std::endl;
 ```
 
 # Building our own Variant
@@ -160,7 +160,7 @@ MaxSizeof<int8_t, int32_t, int16_t>::value == (1 > 4) ? 1 : 4 == 4
 Now `Variant` has exact size of maximum type it holds.
 
 ```cpp
-std::cout << sizeof(Variant<std::int32_t, std::uint8_t>); // prints 4
+std::cout << sizeof(Variant<int32_t, char8_t>); // prints 4
 ```
 
 How do we place someting in `Variant`'s storage?
@@ -168,22 +168,22 @@ How do we place someting in `Variant`'s storage?
 ## Construction
 We want to make this code work:
 ```cpp
-Variant<int8_t, int32_t> v{1};
+Variant<int32_t, char8_t> v{1};
 ```
 
 It's a constructor, and `Variant` needs a family of constructors with every type from `Types...` as a parameter:
 ```cpp
 template<typename... Types>
 class Variant {
-    Variant(const int8_t& x);
-    Variant(const int32_t& x);
+    Variant(char8_t&& x);
+    Variant(int32_t&& x);
 };
 ```
 So we'll use constructor template, accepting any type `T`.
 
 ```cpp
 template<typename T>
-Variant(const T& var) {
+Variant(T&& var) {
 }
 ```
 
@@ -209,8 +209,6 @@ T* any_cast() {
     return *static_cast<T*>(static_cast<void*>(storage_.data()));
 }
 ```
-
-**TODO add_pointer_t?**
 
 Unfortunately it's the same undefined behaviour as with union if we guessed wrong. Coincidentally this function will be useful to us, so let's leave it for now.
 
@@ -312,8 +310,34 @@ template<
 struct IndexOfImpl;
 ```
 
-**TODO `decay_t`**
-**TODO Note that our variant bigger than std::variant**
+The above constructor produces compiler error with initialization from references.
+```cpp
+int x = 1;
+variant_i::Variant<int> v{x}; // OOPS compiler error "too few template arguments for class template 'IndexOfImpl'"
+```
+
+It's the result of special rules of references collapsing in templates. We can see it inn the line compiler tries to instantiate `Variant<int>::Variant<int &>`. The type `T` guessed by compiler is `int&` which cannot be found in the type sequence `Types...` of `Variant<int>`. In order to get correct type we'll use `std::decay_t`, so we'll end up with following constructor declaration .
+
+```cpp
+template<typename T>
+Variant(T&& var)
+: type_idx_{IndexOf<std::decay_t<T>, Types...>::value} {
+    new(storage_.data()) std::decay_t<T>(std::forward<T>(var));
+}
+```
+
+`std::variant` is generally 4 bytes smaller than `Varaint` on my system.
+
+```cpp
+struct S {
+    std::byte x[32];
+};
+
+std::cout << sizeof(std::variant<S>);        // prints 36
+std::cout << sizeof(variant_i::Variant<S>);  // prints 40
+```
+
+It seems that `std::variant` uses 32 bit integer to store type index, whereas `Variant` uses 64 bit. I couldn't find any limit on a number of arguments in variadic template, so I assume that compiler vendors just know that the limit fits into 32bit integer and use that.
 
 Now that we have `type_idx_` stored, we can proceed with `get_if`. Actually there are two versions of it - typed and indexed.
 
@@ -323,14 +347,11 @@ std::get_if<int>(&v); // tries to get variable of type int
 std::get_if<0>(&v);   // tries to get first type, which is also int
 ```
 
-**TODO get<index>**
-
-Which one should we implement first? I didn't know about this, but variant allows repeats of the same type. Yes, `variant<int, int, int>` is allowed. In such case `get_if<int>` gives a compile time error because it's not clear which `int` was requested. This makes `get<index>` the basic building block, which works for every kind of variant.
+Which one should we implement first? I didn't know when I started to build variant, but it allows repeats of the same type. Yes, `variant<int, int, int>` is allowed. In such case `get_if<int>` gives a compile time error because it's not clear which `int` was requested. This makes `get<index>` the basic building block, so let's start from it.
 
 How do we implement `get<index>`?
 
 ### `get_if<index>`
-**TODO member vs friend**
 Indexed get is a bit hard to start with, because we can't even write a proper declaration for it.
 
 ```cpp
@@ -338,7 +359,7 @@ template<size_t Idx>
 T* get_if(); // what's T?
 ```
 
-That's our first goal - to get type `T` at index `Idx` from list of `Types...`.
+Moreover in standard it's declared as friend, but let's just deal with that later. Let our first goal be getting type `T` at index `Idx` from list of `Types...`.
 
 ```cpp
 template<size_t Idx, size_t CurIdx, typename T, typename... Types>
@@ -412,7 +433,7 @@ TypeAtIdx<Idx, Types...>::type* get_if() {
 }
 ```
 
-Let's think about return type a little bit. What if variant holds a reference `Variant<int&>`? Return type of `get_if` becomes `int&*` which is illegal in C++, because it's a pointer to a reference. The better way to convert type to a pointer is `add_pointer_t`. It decays all types correctly, so we'll use it for `get_if` and `any_cast`.
+Let's think about return type a little bit. What if variant holds a reference `Variant<int&>`? Return type of `get_if` becomes `int&*` which is illegal in C++, because it's a pointer to a reference. The better way to convert type to a pointer is `add_pointer_t`. It decays types correctly.
 
 ```cpp
 template<size_t Idx>
@@ -422,9 +443,14 @@ template<typename T>
 std::add_pointer_t<T> any_cast();
 ```
 
-I lied to you. `std::variant` is not permitted to hold references, arrays, or the type void. **TODO add_pointer_t is still usefull because of function types**
+I lied to you - `std::variant` is not permitted to hold references, arrays, or the type void. Typee decay is not relevant in our case, but I find `add_pointer_t` to be more readable so I'll leave it. Let's leave forbidding implementation as a debt for later and deal with more prominent problems.
 
-The other thing is we kinda leaked implementation detail which is `TypeAtIdx` to the public interface of `Variant`. `std::variant` has a thing similar to our `TypeAtIdx` called `variant_alternative_t`. It's used as a return type for `std::get_if`. The difference from `TypeAtIdx` is that `variant_alternative_t` implemented only for `std::variant`, and not for any sequence of types. It's quite simple to build our own `VariantAlteernativeT` using `TypeAtIdx`.
+<details>
+    <summary>Side note about `add_pointer_t`</summary>
+    There is an interesting <a href="https://cplusplus.github.io/LWG/issue2101">read on decaying types</a> by `add_pointer`, which I'll leave for you to explore. But in short - `add_pointer_t` has a special case for `void() const`. It is not a mistake, const qualified <b>non-member</b> function a legal function type in C++, whcih can never be instantiated and only exists as type.
+</details>
+
+We kinda leaked implementation detail which is `TypeAtIdx` to the public interface of `Variant`. `std::variant` has a thing similar to our `TypeAtIdx` called `variant_alternative_t`. It's used as a return type for `std::get_if`. The difference from `TypeAtIdx` is that `variant_alternative_t` implemented only for `std::variant`, and not for any sequence of types. It's quite simple to build our own `VariantAlteernativeT` using `TypeAtIdx`.
 
 ```cpp
 template<size_t Idx, typename T>
@@ -446,7 +472,7 @@ struct VariantAlternative<Idx, Variant<Types...>> {
 };
 ```
 
-If you're confused about ordering, don't worry I'm with you. But I think it works because when user tries to use `get_if` the compiler sees all the declarations and definitions required to compile.
+If you're confused about declaration-definition ordering, don't worry I'm with you. But I think it works because when a user tries to use `get_if` the compiler sees all the declarations and definitions required to compile.
 
 Okay that was a lot. Now we have a problem with constant `Variant`.
 
@@ -534,6 +560,7 @@ We can also get rid of non-const `any_cast`, because now `get_if()` just calls `
 How do we turn `get_if` to free function, that accepts `Variant<Types...>` as a parameter?
 
 ### free
+Let's start with changing implementations of `get_if`.
 
 ```cpp
 template<size_t Idx, typename... Args>
@@ -553,7 +580,7 @@ std::add_pointer_t<VariantAlternativeT<Idx, Variant<Args...>>> get_if(Variant<Ar
 }
 ```
 
-We had to add `nullptr` check and this quirk with `variant-> template any_cast`. From my point of view it does not make sense for compiler to require `template` here, so let me give you an example where it makes sense.
+We had to add `nullptr` check and the quirk with `variant-> template any_cast`. The latter one is not so obvious. From my point of view it does not make sense for compiler to require `template` here, so I can't explain it well. Let me explain it using an example where it's necessary.
 
 ```cpp
 variant->func<0>(13);
@@ -565,11 +592,7 @@ variant-> template func<0>(13);
 
 In the case of `get_if` the second option is even weirder `(variant->any_cast < T) > ()`. `T` is a type and there is no comparison operator for types as far as I know. The rest of the line also gives more questions - what the hell is `> ()`? I don't know why compiler requires `template` in our case, but we'll let it to have this one.
 
-To finalize our work with `get_if<index>` let's make it a free function, like in the standard.
-
-### free
-
-`get_if` needs to access `Variant`'s private section, so it needs to be declared friend. This is actually pretty straightforward if you don't try to overthink it and just copy to class.
+`get_if` access `Variant`'s private section, so it needs to be declared friend. This is pretty straightforward if you don't try to overthink it and just copy to class.
 
 ```cpp
 template<typename... Types>
@@ -579,7 +602,7 @@ class Variant {
 };
 ```
 
-`Types...` from `Variant`'s can't be used for friend declaration because linker will complain, that it can't find right function to call. And linker is right, cosider these two functions.
+`Types...` from `Variant`'s can't be used for friend declaration because linker will complain, that it can't find right function to call. And linker is right to do so, cosider these two functions.
 
 ```cpp
 template<typename... Types>
@@ -591,7 +614,7 @@ template<typename... Args>
 void function2(const Variant<Args...>* variant)
 ```
 
-They have two different signatures. `functionn1` is a template function with it's own parameter pack. `function2` is a weird thing, that just uses parameter pack of class, even though it has not relation to it. So it doesn't pay off to be smart here and reuse `Varaint`'s parameter pack.
+They have two different signatures. `function1` is a template function with it's own parameter pack. `function2` is a weird thing, that just uses parameter pack of class, even though it has not relation to it. So it doesn't pay off to be smart here and reuse `Varaint`'s parameter pack.
 
 Non-const version of `get_if` doesn't need to be declaraed friend, because it just calls const `get_if`. So that's the only friend declaration we'll need. Neat.
 
@@ -599,21 +622,28 @@ Ok, so what's about other typed version of `get_if`?
 
 ### `get_if<T>`
 
-Now that we have `IndexOf` implemented and type index stored, `get<T>` becomes rather easy to implement.
+Now that we have `IndexOf` implemented and type index stored, `get<T>` becomes rather easy to implement using `get_if<index>`.
+
 ```cpp
-template<typename T>
-T* get_if() {
-    if (IndexOf<T, Types...>::value != type_idx_) {
-        throw std::runtime_error("Type is not right"); // bad_variant_access is in <variant> header
-    } else {
-        return *any_cast<T>();
-    }
+template<typename T, typename... Args>
+std::add_pointer_t<const T> get_if(const Variant<Args...>* variant) {
+    return get_if<IndexOf<T, Args...>::value>(variant);
+}
+
+template<typename T, typename... Args>
+std::add_pointer_t<T> get_if(Variant<Args...>* variant) {
+    return get_if<IndexOf<T, Args...>::value>(variant);
 }
 ```
 
-### get
+And that's it with `get_if`. `std::variant` has other type of accessor, which returns references and throws on invalid type. It's called `get`.
 
-The documentation has 4 overloads of function get:
+How do we implement it?
+
+### get<T>
+
+Let's first talk about what we need to implement. The documentation has 4 overloads of `get<T>` function:
+
 ```cpp
 template<typename T, typename... Args>
 T& get(Variant<Args...>& variant);
@@ -622,12 +652,15 @@ const T& get(const Variant<Args...>& variant);
 const T&& get(const Variant<Args...>&& variant);
 ```
 
-**TODO what the hell is T&&?**
-**TODO rework all text**
-We could potentially just copy-paste code with some tweaks for `const`, but I hope we'd all prefer some code reuse. Ideally, to implement logic in just one function and call it in three others. Which one is the only to be called?
+You might be wondering, what is `const T&&`? You don't see that much often, because it what happens when you return `const T` from a function.
 
-### `get<T>` overloads
-The type, that accepts incoming `T&`, `T&&` and `const T&&` is `const T&`. So if we only implement function accepting `f(const T&)`, we can call it from every other.
+```cpp
+const int f();
+f(); // returned type of F is const int&&
+```
+
+But as `std::variant` needs to be as generic as possible, it needs to cover this case.
+The situation with four overloads is much like with `const` and `non-const` `get_if` versions - which one should we implement to be the base of all the rest? The type that all three others are convertible to is `const T&`.
 
 ```cpp
 void clref(const int& x);
@@ -645,41 +678,71 @@ void crref(const int&& x) {
 }
 ```
 
-In our case we also have a return type, so we have a problem.
-```cpp
-const int& clref(const int& x);
+We only need to implement `get` for `const Variant&`. It was easier to talk about `get<T>` but it's once again better to start with `get<index>`. The implementation is based on `get_if`.
 
-int& lref(int& x) {
-    return clref(x);  // OOPS const int& is not convertible to int&
+```cpp
+template<size_t Idx, typename... Args>
+const VariantAlternativeT<Idx, Variant<Args...>>& get(const Variant<Args...>& variant) {
+    const auto* content = get_if<Idx>(&variant);
+    if (content) {
+        return *content;
+    } else {
+        throw std::runtime_error("Variant holds different alternative");
+    }
 }
 ```
 
-We could use `const_cast`
+All other `get<index>` function just use the  one above.
 ```cpp
-const int& clref(const int& x);
+template<size_t Idx, typename... Args>
+VariantAlternativeT<Idx, Variant<Args...>>& get(Variant<Args...>& variant) {
+    using T = VariantAlternativeT<Idx, Variant<Args...>>;
+    const auto& cvariant = variant;
+    return const_cast<T&>(get<Idx>(cvariant));
+}
 
-int& lref(int& x) {
-    return const_cast<int&>(clref(x));
+template<size_t Idx, typename... Args>
+VariantAlternativeT<Idx, Variant<Args...>>&& get(Variant<Args...>&& variant) {
+    return std::move(get<Idx>(variant));
+}
+
+template<size_t Idx, typename... Args>
+const VariantAlternativeT<Idx, Variant<Args...>>&& get(const Variant<Args...>&& variant) {
+    return std::move(get<Idx>(variant));
 }
 ```
-The trick is, that sometimes this code is perfectly legal and sometimes causes UB. It depends on what `clref` function does. How so? Standard says, that it's legal to drop constness of object, which was not const in creation, and it's illegal if it was.
 
-Returning to our example with `lref` function calling `clref`. If we are sure, that `clref` operates only on object x that we passed - it's perfectly legal to cast away `const`.
+Typed versions of `get` use their indexed counterparts.
 
 ```cpp
-const int& clref(const int& x) {
-    return x;
+template<typename T, typename... Args>
+const T& get(const Variant<Args...>& variant) {
+    return get<IndexOf<T, Args...>::value>(variant);
 }
 
-int& lref(int& x) {
-    return const_cast<int&>(clref(x));
+template<typename T, typename... Args>
+T& get(Variant<Args...>& variant) {
+    return get<IndexOf<T, Args...>::value>(variant);
+}
+
+template<typename T, typename... Args>
+T&& get(Variant<Args...>&& variant) {
+    return std::move(get<T>(variant));
+}
+
+template<typename T, typename... Args>
+const T&& get(const Variant<Args...>&& variant) {
+    return std::move(get<T>(std::move(variant)));
 }
 ```
-And that's exactly our case with `get` function. So that means we may only implement const reference version and call it from every other. How do we do it?
 
+And that's finally it with all versions of `get`. Now we have a `Variant`, that we can construct and access it's value. Now the time to think about end of `Varaint`'s lifecycle.
+
+How should `Variant` be destructed?
 
 ## Destruction
-Let's address another problem, that `Variant`'s constructor introduced. Placement new can't be cleaned up with simple `delete` call. Code must explictly call appropiate destructor.
+Placement new can't be cleaned up with simple `delete` call. Code must explictly call appropiate destructor.
+
 ```cpp
 std::array<std::byte, sizeof(T)> storage; // allocate storage
 T* tptr = new(storage.data()) T;          // save type using pointer
@@ -687,13 +750,15 @@ tptr->~T();                               // delete explicitly
 ```
 
 In our case it's a bit worse beacuse we can't actually save a pointer of type `T`. And even though we have `TypeAtIdx` it's not usable in runtime.
+
 ```cpp
 ~Variant() {
     using T = TypeAtIdx<type_idx_, Types...>;  // this does not work
     type_cast<T>()->~T();
 }
 ```
-Destructor can't be called recursively to iterate `Types...` , so a helper function is needed. It will iterate through sequence of indexes `0..sizeof...(Types)` and when hitting appropriate one - use `TypeAtIdx` to call proper destructor.
+
+Destructor can't be called recursively to iterate `Types...` , so a helper function is needed. It will iterate through the sequence of indexes `0..sizeof...(Types)` and call proper destructor on hitting appropriate one.
 
 ```cpp
 template<size_t Idx>
@@ -707,11 +772,13 @@ void destroy() {
 }
 ```
 
-When compiled this code will give a long long error message boiling down to:
+When compiled this code will give a long long error message boiling down to.
+
 ```
 error: too few template arguments for class template 'TypeAtIdxImpl'
     using type = TypeAtIdxImpl<Idx, CurIdx + 1, Types...>;
 ```
+
 That's because compiler doesn't know when to stop recursion. For example for `Variant` with just one element compiler will generate following function `destroy`:
 
 ```cpp
@@ -764,48 +831,93 @@ template<1>
 void destroy() {}
 ```
 
+Now our `Variant` is properly destructed! Let's add some simple bits.
+
 ## Other
-### Index
-### HoldsAlternative
-### VariantSize
-### Default constructor
-### Swap
-### Align
-
-Okay, so now we actually have a pretty neat little `Variant`. It has proper construction and destruction. The stored value can be type-safely retrieved and modified. But there are two big missing parts. Our `Variant` can't be copied or moved. And the typed of stored value is decided on creation and can't be changed later.
-**TODO connected to exception safety and that's where we'll start our part II**
-
-## Part II
-### Emplace
-
-**TODO example with shared_ptr**
-**TODO exception safety**
-### Copy & Move constructor
-**TODO concepts to solve problem with two constructors**
-**copy and move constructors**
+### `Variant::index()`
+Returns `type_idx_` stored in `Variant.`
 
 ```cpp
-    Variant& operator=(Variant&& other) {
-        auto tmp = std::move(other);
-        tmp.swap(*this);
-        return *this;
-    }
+size_t index() {
+    return type_idx_;
+}
+
+size_t index() const {
+    return type_idx_;
+}
 ```
 
-### default constructor
-concepts
+### `Variant::swap()`
+Swaps two `Variants`.
 
-### operator=(T), emplace & ValuelessByException
-**operator= with swap trick**
-**operator= for same type**
-**operator= and valueless_vy_exception**
-**concepts for operator= and copy constructors type_traits**
-### ExceptionSafety
-### Comparison
-### Visit
-It's just too complicated signature
-### `Variant<int, int, int>`
-Very interesting thing, Idx must check for index.
-**TODO get<int>**
-### Hash
-hash is connecte to type_idx_, so we'll need to explain above
+```cpp
+void swap(Variant& other) {
+    std::swap(type_idx_, other.type_idx_);
+    std::swap(storage_, other.storage_);
+}
+```
+
+### `hold_alternative`
+Checks that `Variant` holds provided type.
+
+```cpp
+template<typename T, typename... Types>
+bool holds_alternative(const Variant<Types...>& v) {
+    return v.index() == IndexOf<T, Types...>::value;
+}
+```
+
+
+
+### `variant_size`
+Returns size of the variadiac type sequnce.
+
+```cpp
+template<typename T>
+struct VariantSize;
+
+template<typename... Types>
+struct VariantSize<Variant<Types...>>: std::integral_constant<size_t, sizeof...(Types)> {
+};
+
+template<typename T>
+inline constexpr size_t VariantSizeV = VariantSize<T>::value;
+```
+
+### Default constructor
+`Variant`'s deefault constructor tries to default construct the first type in the sequence of types if it's default-constructible. If it's not - it leads to a compilation error.
+
+```cpp
+Variant()
+: type_idx_{0} {
+    using T = typename TypeAtIdx<0, Types...>::type;
+    new(storage_.data()) T();
+}
+```
+
+### Align
+**TODO**
+
+## Conclusion
+Let's recap - now we have a pretty neat little `Variant`. It has proper construction and destruction. The stored value can be type-safely retrieved and modified. But there are two big missing parts:
+- `Variant` can't be copied or moved.
+- The type of stored value can't be changed
+```cpp
+Variant<int, char> x {1};
+x = 'a';                  // OOPS can't change types
+Variant<int, char> y = x; // OOPS no copy constructor
+y = x;                    // OOPS no copy assignment
+```
+
+Both operations are connected to a topic we've not covered yet - exception safety. It adds a whole new layer of complexity to a `Variant`, so let's just leave it for part 2 of our journey of creating `std::varaint` from scratch. I may need to split the rest of topics to part 2 and 3, but we'll cover:
+- exception safety and `valueless_by_exception`
+- variant::emplace
+- copy and move constructors
+- copy and move assignments
+- comparison operators
+- Variant::visit
+- Variant::hash
+- Repeated types in `Variant` i.e. `Variant<int, int, int>`
+- `type_traits` correctness as well as other compile time constraints for `Variant`
+
+I hope yo've enjoyed the read and please leave me comments and questions.

@@ -54,11 +54,6 @@ struct VariantAlternative;
 template<size_t Idx, typename T>
 using VariantAlternativeT = typename VariantAlternative<Idx, T>::type;
 
-template<class T, class U>
-concept NotIsSame = !std::is_same_v<U, T>;
-
-template<class T, class U>
-concept Derived = std::is_base_of_v<U, T>;
 
 template<typename T, typename... Types>
 concept VariantConvertible = std::disjunction_v<std::is_convertible<T, Types>...>;
@@ -85,6 +80,26 @@ public:
 
     ~Variant() {
         destroy<0>();
+    }
+
+    template<size_t Idx, typename... Args>
+    friend std::add_pointer_t<const VariantAlternativeT<Idx, Variant<Args...>>> get_if(const Variant<Args...>* variant);
+
+    size_t index() noexcept {
+        return type_idx_;
+    }
+
+    size_t index() const noexcept {
+        return type_idx_;
+    }
+
+    void swap(Variant& other) noexcept {
+        std::swap(type_idx_, other.type_idx_);
+        std::swap(storage_, other.storage_);
+    }
+
+    bool valueless_by_exception() const noexcept {
+        return type_idx_ == variant_npos;
     }
 
     Variant(const Variant& other)
@@ -124,22 +139,6 @@ public:
         destroy<0>();
         new(storage_.data()) T(std::forward<Args>(args)...);
         type_idx_ = IndexOf<T, Types...>::value;
-    }
-
-    template<size_t Idx, typename... Args>
-    friend std::add_pointer_t<const VariantAlternativeT<Idx, Variant<Args...>>> get_if(const Variant<Args...>* variant);
-
-    size_t index() const {
-        return type_idx_;
-    }
-
-    bool valueless_by_exception() const {
-        return type_idx_ == variant_npos;
-    }
-
-    void swap(Variant& other) {
-        std::swap(type_idx_, other.type_idx_);
-        std::swap(storage_, other.storage_);
     }
 
 private:
@@ -282,8 +281,7 @@ T&& get(Variant<Args...>&& variant) {
 
 template<typename T, typename... Args>
 const T&& get(const Variant<Args...>&& variant) {
-    const auto& cvariant = variant;
-    return std::move(get<T>(cvariant));
+    return std::move(get<T>(std::move(variant)));
 }
 
 template<typename T>
