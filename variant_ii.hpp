@@ -198,7 +198,7 @@ private:
     }
 
     size_t type_idx_;
-    std::array<std::byte, MaxSizeof<Types...>::value> storage_;
+    alignas(MaxSizeof<Types...>::value) std::array<std::byte, MaxSizeof<Types...>::value> storage_;
 };
 
 template<size_t Idx, typename... Types>
