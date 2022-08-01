@@ -8,7 +8,7 @@ Please don't ask me why, but I decided to write an `std::variant` from scratch. 
 
 I didn't know a lot of stuff required to build proper `std::variant`, so I had to look up clues in the code of available variant implementations. And they are not built for clarity of reading. That's why I decided to write a clear follow up to my endeavour and I hope it might help anyone trying to learn more about C++.
 
-I think the best way to work with this text is to start building `std::variant` yourself. Look for answers here in case of trouble. That's why text is structured to tackle one function of variant at time. Every block ends with plan on what we'll build next, so you may stop and try before seeing my solution. The text is split into several big parts to tackle `Variant`'s complexity gradually. The first part is about building `Variant`, that can only be constructed, accessed and destructed.
+I think the best way to work with this text is to start building `std::variant` yourself. Look for answers here in case of trouble. That's why text is structured to tackle one function of variant at time. Every block ends with plan on what we'll build next, so you may stop and try before seeing my solution. The text is split into several big parts to tackle `Variant`'s complexity gradually. The first part is about building `Variant`, that can only be constructed, accessed and destructed. As you may've already noted the text refers to standard variant as `std::variant` and our variant is capitalized - `Variant`.
 
 There is also a full code listing accompanying the text. It's also split in several big parts for readability of each. Code and tests for the first part live in [variant_i.hpp](variant_i.hpp) and [test/test_i.cpp](test/test_i.cpp).
 
@@ -22,9 +22,9 @@ You've probably heard about `union` in C and C++. If you've not - `union` is a w
 ```cpp
 union S
 {
-    int32_t i; // occupies 32 bits
-    char8_t c; // occupies 8 bits
-};             // the whole union occupies 4 bytes
+    int32_t i;          // occupies 32 bits
+    char8_t c;          // occupies 8 bits
+};                      // the whole union occupies 4 bytes
 
 S s;                    // uninitialized union
 std::cout << sizeof(s); // prints 4 (on a system where 1 byte == 8 bit)
@@ -46,7 +46,7 @@ std::cout << s.c; // OOPS - undefined behaviour
 
 And as we all know UB is very bad - it happens only in runtime and is usually hard to catch. There are much more subtle problems with union, like the fact that you need to explicitly call proper destructors for more complex types.
 
-You might be wondering why would anyone ever want to share space between types. And I'll link you to [this Stackoverflow](https://stackoverflow.com/questions/4788965/when-would-anyone-use-a-union-is-it-a-remnant-from-the-c-only-days) answer for lengthy explanation. But in short:
+You might be wondering why would anyone ever want to share space between types. And I'll link you to [this Stackoverflow](https://stackoverflow.com/questions/4788965/when-would-anyone-use-a-union-is-it-a-remnant-from-the-c-only-days) answer for a lengthy explanation. But in short:
 1. Performance optimization
 2. Bit trickery
 3. Different way to handle polymorphism
@@ -107,7 +107,7 @@ If the type is not from expected list of types, error is actually compile time!
 
 ```cpp
 std::variant<int32_t, char8_t> v{1}; // variant now holds int32_t{1}
-std::cout << std::get<floats>(v);    // compile time error
+std::cout << std::get<float>(v);    // compile time error
 ```
 
 As `variant` uses some extra space it is slightyly bigger than union. That's the cost of type safety.
@@ -126,7 +126,7 @@ class Variant {
 };
 ```
 
-We can't actually just put `union` inside our variant class, so we'll have to improvise.
+We can't just put `union` inside our variant class, so we'll have to improvise.
 
 How do we allocate enough storage to hold all our types?
 
@@ -214,8 +214,8 @@ It's a constructor, and `Variant` needs a family of constructors with every type
 ```cpp
 template<typename... Types>
 class Variant {
-    Variant(char8_t&& x);
     Variant(int32_t&& x);
+    Variant(char8_t&& x);
 };
 ```
 So we'll use constructor template, accepting any type `T`.
@@ -237,7 +237,7 @@ Variant(const T& var) {
 }
 ```
 
-You may already see the problem - right now we can place any type `T` inside our storage.Anyway let's for now continue with implementing ther rest of the interface. This and other problems will become obvious and we'll fix them along the way, I promise.
+You may already see the problem - right now we can place any type `T` inside our storage. Anyway let's for now continue with implementing ther rest of the interface. This and other problems will become obvious and we'll fix them along the way, I promise.
 
 Next, how do we get the value back from `Variant`?
 
@@ -252,12 +252,12 @@ T* any_cast() {
 
 Unfortunately it's the same undefined behaviour as with union if we guessed wrong. Coincidentally this function will be useful to us, so let's leave it for now.
 
-In order to avoid UB `get_if` can call `any_cast` only if guessed type `T` is the type of value in `storage_`. Otherwise `nullptr` is returned. That's why the standard calls this function `get_if`. To do so we'll need to store some type information to check in `get_if`.
+In order to avoid UB `get_if` can call `any_cast` only if guessed type `T` is the type of a value in `storage_`. Otherwise `nullptr` is returned. That's why the standard calls this function `get_if`. To do so we'll need to store some type information to check in `get_if`.
 
 How do we store type information?
 
 ### Saving type info
-Let's go back to the constructor and use very simple type info - index of the type in the sequence. Length of pack `sizeof...(Types...)` has type `size_t` so let's use it for our index to be valid.
+Let's go back to the constructor and use very simple type info - index of the type in the sequence. Length of pack `sizeof...(Types...)` has type `size_t` so let's use it for our index to be valid for any type in the sequence.
 
 ```cpp
 template<typename... Types>
@@ -361,7 +361,7 @@ int x = 1;
 variant_i::Variant<int> v{x}; // OOPS compiler error "too few template arguments for class template 'IndexOfImpl'"
 ```
 
-It's the result of special rules of references collapsing in templates. We can see it in the line compiler tries to instantiate `Variant<int>::Variant<int &>`. The type `T` guessed by compiler is `int&` which cannot be found in the type sequence `Types...` of `Variant<int>`. In order to get correct type we'll use `std::decay_t`, so we'll end up with following constructor declaration.
+It's the result of special rules of references collapsing in templates. We can see it in the line compiler tries to instantiate `Variant<int>::Variant<int &>`. The type `T` guessed by compiler is `int&` which cannot be found in the type sequence `Types...` of `Variant<int>`. In order to get the correct type we'll use `std::decay_t`, so we'll end up with following constructor declaration.
 
 ```cpp
 template<typename T>
@@ -488,7 +488,7 @@ template<typename T>
 std::add_pointer_t<T> any_cast();
 ```
 
-I lied to you - `std::variant` is not permitted to hold references, arrays, or the type void. Typee decay is not relevant in our case, but I find `add_pointer_t` to be more readable so I'll leave it. Let's leave forbidding implementation as a debt for later and deal with more prominent problems.
+I lied to you - `std::variant` is not permitted to hold references, arrays, or the type void. Type decay is not relevant in our case, but I find `add_pointer_t` to be more readable so I'll leave it. Let's leave forbidding implementation as a debt for later and deal with more prominent problems.
 
 *Side note on `add_pointer_t`. There is an interesting [read on decaying types](https://cplusplus.github.io/LWG/issue2101) with `add_pointer`, which I'll leave for you to explore. But in short - `add_pointer_t` has a special case for `void() const`. It is not a mistake, const qualified **non-member** function is a legal function type in C++, which can never be instantiated and only exists as type.*
 
@@ -514,7 +514,7 @@ struct VariantAlternative<Idx, Variant<Types...>> {
 };
 ```
 
-If you're confused about declaration-definition ordering, don't worry I'm with you. But I think it works because when a user tries to use `get_if` the compiler sees all the declarations and definitions required to compile.
+If you're confused about declaration-definition ordering, don't worry I'm with you. But I think it works because he compiler sees all the declarations and definitions when a user tries to use `get_if`.
 
 Okay that was a lot. Now we have a problem with constant `Variant`.
 
@@ -538,7 +538,7 @@ It calls `any_cast`, so we'll also need a constant version of that.
 ```cpp
 template<typename T>
 const T* any_cast() const {
-    return *static_cast<const T*>(static_cast<void*>(storage_.data()));
+    return *static_cast<const T*>(static_cast<const void*>(storage_.data()));
 }
 ```
 
@@ -601,7 +601,7 @@ Now `get_if()` just calls `get_if() const` we can also get rid of non-const `any
 
 How do we turn `get_if` to free function, that accepts `Variant<Types...>` as a parameter?
 
-### free
+### free `get_if`
 Let's start with changing implementations of `get_if`.
 
 ```cpp
