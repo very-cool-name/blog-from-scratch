@@ -136,65 +136,11 @@ First of all we need **stack** storage of size equals to maximum in all of `Type
 ```cpp
 template<typename... Types>
 class Variant {
-    std::array<std::byte, MaxSizeof<Types...>::value> storage_;
+    std::array<std::byte, std::max({sizeof(Types)...})> storage_;
 };
 ```
 
-`MaxSizeof` will be implemented with recursive approach to unrolling variadic templates.
-
-```cpp
-template<typename T, typename... Types>
-struct MaxSizeof {
-private:
-    constexpr static auto maxSizeof = MaxSizeof<Types...>::value;
-public:
-    constexpr static auto value = sizeof(T) > maxSizeof ? sizeof(T) : maxSizeof;
-};
-
-template<typename T>
-struct MaxSizeof<T> {
-    constexpr static auto value = sizeof(T);
-};
-```
-
-I think the best way to understand this recursion is trying to understand what compiler has to generate for specific example.
-
-```cpp
-// For following definition
-MaxSizeof<int8_t, int32_t, int16_t>::value
-
-// Compiler will generate this code
-template<int8_t, int32_t, int16_t>
-struct MaxSizeof {
-    private:
-        constexpr static auto maxSizeof = MaxSizeof<int32_t, int16_t>::value;  // dependency
-    public:
-        constexpr static auto value = sizeof(int8_t) > maxSizeof ? sizeof(int8_t) : maxSizeof;
-};
-
-// Now compiler sees dependency on MaxSizeof<int32_t, int16_t>::value and will have to generate
-template<int32_t, int16_t>
-struct MaxSizeof {
-    private:
-        constexpr static auto maxSizeof = MaxSizeof<int16_t>::value; // dependency
-    public:
-        constexpr static auto value = sizeof(int32_t) > maxSizeof ? sizeof(int32_t) : maxSizeof;
-};
-
-// Now compiler sees dependency on MaxSizeof<int16_t>::value
-// It also sees specialization for a single type and will have to use that for generation
-template<int16_t>
-struct MaxSizeof {
-    constexpr static auto value = sizeof(int16_t);
-};
-
-// This leads to following values:
-MaxSizeof<int16_t>::value == 2;
-MaxSizeof<int32_t, int16_t>::maxSizeof == MaxSizeof<int16_t>::value == 2;
-MaxSizeof<int32_t, int16_t>::value == (4 > 2) ? 4 : 2 == 4
-MaxSizeof<int8_t, int32_t, int16_t>::maxSizeof == MaxSizeof<int32_t, int16_t>::value == 4;
-MaxSizeof<int8_t, int32_t, int16_t>::value == (1 > 4) ? 1 : 4 == 4
-```
+`std::max({sizeof(Types)...})` takes care of determining the maximum size of a types from `Types...`. This line unfolds to something like `std::max({sizeof(T0), sizeof(T1), ...})` and it takes advantage of `constexpr` initializer list overload of `std::max`. Thanks to reddit users [u/cpp_learner](https://www.reddit.com/user/cpp_learner/) and [u/matthieum](https://www.reddit.com/user/matthieum/), who pointed out that it can be done using just standard library.
 
 Now `Variant` has exact size of maximum type it holds.
 
@@ -254,7 +200,16 @@ Unfortunately it's the same undefined behaviour as with union if we guessed wron
 
 In order to avoid UB `get_if` can call `any_cast` only if guessed type `T` is the type of a value in `storage_`. Otherwise `nullptr` is returned. That's why the standard calls this function `get_if`. To do so we'll need to store some type information to check in `get_if`.
 
-How do we store type information?
+We'll do it shortly, but while we're here it turns out, that even with the right type `any_cast` still results in undefined behaviour. It was pointed out to me by reddit user [IAmRoot](https://www.reddit.com/user/IAmRoot/) and I'll point you to [the detailed explanation](https://www.reddit.com/r/cpp/comments/wgtdt7/comment/ij32fur/?utm_source=share&utm_medium=web2x&context=3) in the comment. There is also a good [stackoverflow answer](https://stackoverflow.com/a/73270247/3169872). However the basic idea is that `storage_.data()` returns pointer to array which is not aliased (or not pointer-interconvertible in the standard) with a pointer to object. This makes dereference and member access on a casted pointer illegal. In order to fix that C++17 introduced [std::launder](https://en.cppreference.com/w/cpp/utility/launder), which we'll happily use.
+
+```cpp
+template<typename T>
+T* any_cast() {
+    return std::launder(static_cast<T*>(static_cast<void*>(storage_.data())));
+}
+```
+
+Anyway, how do we store type information?
 
 ### Saving type info
 Let's go back to the constructor and use very simple type info - index of the type in the sequence. Length of pack `sizeof...(Types...)` has type `size_t` so let's use it for our index to be valid for any type in the sequence.
@@ -271,7 +226,7 @@ public:
 
 private:
     size_t type_idx_;
-    std::array<std::byte, MaxSizeof<Types...>::value> storage_;
+    std::array<std::byte, std::max({sizeof(Types)...})> storage_;
 };
 ```
 
@@ -294,7 +249,7 @@ struct IndexOf {
 };
 ```
 
-It's unrolling recursion time!
+I think the best way to understand this recursion is trying to understand what compiler has to generate for specific example.
 
 ```cpp
 // For following definition
@@ -426,7 +381,7 @@ template<size_t Idx>
 TypeAtIdx<Idx, Types..>::type* get_if();
 ```
 
-Is it plane? Is it bird? No, it's a variadic recursion.
+Is it a plane? Is it a bird? No, it's an unrolling of variadic recursion.
 
 ```cpp
 // For following definition
@@ -538,7 +493,7 @@ It calls `any_cast`, so we'll also need a constant version of that.
 ```cpp
 template<typename T>
 const T* any_cast() const {
-    return *static_cast<const T*>(static_cast<const void*>(storage_.data()));
+    return std::launder(static_cast<const T*>(static_cast<const void*>(storage_.data())));
 }
 ```
 
@@ -889,16 +844,6 @@ size_t index() const {
 }
 ```
 
-### `Variant::swap()`
-Swaps two `Variants`.
-
-```cpp
-void swap(Variant& other) {
-    std::swap(type_idx_, other.type_idx_);
-    std::swap(storage_, other.storage_);
-}
-```
-
 ### `hold_alternative`
 Checks that `Variant` holds provided type.
 
@@ -908,8 +853,6 @@ bool holds_alternative(const Variant<Types...>& v) {
     return v.index() == IndexOf<T, Types...>::value;
 }
 ```
-
-
 
 ### `variant_size`
 Returns size of the variadic type sequence.
@@ -942,7 +885,7 @@ Variant()
 ```cpp
 template<typename... Types>
 class Variant {
-    alignas(MaxSizeof<Types...>::value) std::array<std::byte, MaxSizeof<Types...>::value> storage_;
+    alignas(Types...) std::array<std::byte, std::max({sizeof(Types)...})> storage_;
 };
 ```
 
@@ -962,6 +905,7 @@ Both operations are connected to a topic we've not covered yet - exception safet
 - variant::emplace
 - copy and move constructors
 - copy and move assignments
+- swap
 - comparison operators
 - Variant::visit
 - Variant::hash
@@ -969,3 +913,6 @@ Both operations are connected to a topic we've not covered yet - exception safet
 - `type_traits` correctness as well as other compile time constraints for `Variant`
 
 I hope yo've enjoyed the read and please leave me comments and questions.
+
+## Thanks
+Many thanks to users [u/cpp_learner](https://www.reddit.com/user/cpp_learner/), [u/IAmRoot](https://www.reddit.com/user/IAmRoot/), [u/matthieum](https://www.reddit.com/user/matthieum/), [u/TeutonicK4ight](https://www.reddit.com/user/TeutonicK4ight/) and others who left valuable comments under my [reddit post](https://www.reddit.com/r/cpp/comments/wgtdt7/building_stdvariant_from_scratch_part_1/).

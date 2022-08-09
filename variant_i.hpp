@@ -1,22 +1,10 @@
 #pragma once
 
 #include <array>
+#include <new>
 #include <type_traits>
 
 namespace variant_i {
-template<typename T, typename... Types>
-struct MaxSizeof {
-private:
-    constexpr static auto maxSizeof = MaxSizeof<Types...>::value;
-public:
-    constexpr static auto value = sizeof(T) > maxSizeof ? sizeof(T) : maxSizeof;
-};
-
-template<typename T>
-struct MaxSizeof<T> {
-    constexpr static auto value = sizeof(T);
-};
-
 template<typename Search, size_t Idx, typename T, typename... Types>
 struct IndexOfImpl {
     static constexpr size_t value = IndexOfImpl<Search, Idx + 1, Types...>::value;
@@ -83,15 +71,10 @@ public:
         return type_idx_;
     }
 
-    void swap(Variant& other) {
-        std::swap(type_idx_, other.type_idx_);
-        std::swap(storage_, other.storage_);
-    }
-
 private:
     template<typename T>
     const T* any_cast() const {
-        return static_cast<const T*>(static_cast<const void*>(storage_.data()));
+        return std::launder(static_cast<const T*>(static_cast<const void*>(storage_.data())));
     }
 
     template<size_t Idx>
@@ -108,7 +91,7 @@ private:
     void destroy<sizeof...(Types)>() {}
 
     size_t type_idx_;
-    alignas(MaxSizeof<Types...>::value) std::array<std::byte, MaxSizeof<Types...>::value> storage_;
+    alignas(Types...) std::array<std::byte, std::max({sizeof(Types)...})> storage_;
 };
 
 template<size_t Idx, typename... Types>
