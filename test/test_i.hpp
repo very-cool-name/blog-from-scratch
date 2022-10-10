@@ -167,7 +167,7 @@ void holds_alternative_works() {
 template <template<typename...> typename V>
 struct TestI {
     static void test () {
-        std::cout << "start TestI " << TestName<V>::name << "\n";
+        std::cout << "start TestI " << utility::TestName<V>::name << "\n";
         static_test();
         calls_copy_constructor<V>();
         calls_move_constructor<V>();
@@ -179,7 +179,7 @@ struct TestI {
         constructible_from_value<V>();
         default_constructible<V>();
         holds_alternative_works<V>();
-        std::cout << "end TestI " << TestName<V>::name << "\n" << std::endl;
+        std::cout << "end TestI " << utility::TestName<V>::name << "\n" << std::endl;
     }
 
 private:

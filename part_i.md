@@ -1,4 +1,5 @@
-# Intro
+# Building variant from scratch part I - construction and value access
+## Intro
 Please don't ask me why, but I decided to write an `std::variant` from scratch. It turned out to be, what I think is the most interesting container to implement. It requires a deep dig into the guts of C++ including:
 1. Combining templates in run time and compile time
 2. Exception safety

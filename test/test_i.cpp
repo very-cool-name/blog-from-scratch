@@ -18,10 +18,12 @@ static_assert(VariantSizeV<Variant<std::variant<std::any>>> == 1);
 } // namespace static_test
 
 namespace test {
+namespace utility {
 template<>
 struct TestName<variant_i::Variant> {
     inline static const std::string name = "variant_i::Variant";
 };
+}
 }
 
 int main() {
